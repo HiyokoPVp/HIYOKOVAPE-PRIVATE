@@ -1,4 +1,3 @@
---This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.
 -- hiyoko vape ver 3.0 fixed
 local canDebug = true
 

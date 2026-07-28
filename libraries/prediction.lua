@@ -1,4 +1,3 @@
---This watermark is used to delete the file if its cached, remove it to make the file persist after vape updates.
 --[[
 	Prediction Library (改善版)
 	Original: https://devforum.roblox.com/t/predict-projectile-ballistics-including-gravity-and-motion/1842434
