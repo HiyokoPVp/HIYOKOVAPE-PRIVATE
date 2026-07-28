@@ -1,3 +1,5 @@
+print("sucess hiyokovape private")
+
 local loadstring = function(...)
 	local res, err = loadstring(...)
 	if err and vape then
@@ -14,7 +16,7 @@ end
 local function downloadFile(path, func)
 	if not isfile(path) then
 		local suc, res = pcall(function()
-			return game:HttpGet('https://raw.githubusercontent.com/HiyokoPVp/HIYOKO-VAPE/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true)
+			return game:HttpGet('https://raw.githubusercontent.com/HiyokoPVp/HIYOKOVAPE-PRIVATE/'..readfile('newvape/profiles/commit.txt')..'/'..select(1, path:gsub('newvape/', '')), true)
 		end)
 		if not suc or res == '404: Not Found' then
 			error(res)
@@ -157,6 +159,10 @@ local vapeLogo = findVapeLogo("VapeLogo")
 if vapeLogo then
   vapeLogo.Image = getcustomasset('newvape/assets/new/textvape.png')
 end
+
+print("sucess hiyokovape private")
+
+print("sucess again")
 
 local function rakNetCheck(module)
 	if not (raknet and raknet.add_send_hook and pcall(raknet.add_send_hook, function() end)) then
