@@ -5798,6 +5798,12 @@ mainapi:CreateCategory({
 	Icon = getcustomasset('newvape/assets/new/miniicon.png'),
 	Size = UDim2.fromOffset(19, 12)
 })
+
+mainapi:CreateCategory({
+	Name = 'AntiCheat Things',
+	Icon = getcustomasset('newvape/assets/new/utilityicon.png'),
+	Size = UDim2.fromOffset(15, 14)
+})
 mainapi.Categories.Main:CreateDivider('misc')
 
 --[[
