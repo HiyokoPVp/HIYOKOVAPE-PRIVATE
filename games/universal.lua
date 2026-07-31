@@ -1,4 +1,4 @@
-print("sucess hiyokovape private")
+print("sucess hiyokovape private from chinko")
 
 local loadstring = function(...)
 	local res, err = loadstring(...)
