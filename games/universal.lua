@@ -146,6 +146,8 @@ local function removeTags(str)
 	return (str:gsub('<[^<>]->', ''))
 end
 
+print("sucess hiyokovape private")
+
 local function findVapeLogo(objname)
     for _, obj in ipairs(game:GetService("CoreGui"):GetDescendants()) do
         if obj.Name == objname then
@@ -159,8 +161,6 @@ local vapeLogo = findVapeLogo("VapeLogo")
 if vapeLogo then
   vapeLogo.Image = getcustomasset('newvape/assets/new/textvape.png')
 end
-
-print("sucess hiyokovape private")
 
 print("sucess again")
 
