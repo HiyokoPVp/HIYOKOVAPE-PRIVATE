@@ -7738,7 +7738,7 @@ run(function()
 		Min = 1,
 		Max = 99,
 		Default = 70,
-		Suffix = '%'
+		Suffix = function(val) return '%' end
 	})
 	SpeedPotion = AutoConsume:CreateToggle({
 		Name = 'Speed Potions',
