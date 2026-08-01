@@ -14720,3 +14720,95 @@ run(function()
         Suffix = 's',
     })
 end)
+
+run(function()
+    local TPDown
+    local Duration
+    local RayParams = RaycastParams.new()
+    RayParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
+    
+    -- テレポート状態の管理用変数
+    local isTeleporting = false
+    local teleportEndTime = 0
+    local originalPosition = nil
+    local returnConnection = nil
+
+    TPDown = vape.Categories.AntiCheat:CreateModule({
+        Name = 'TPDown',
+        Function = function(callback)
+            if callback then
+                -- モジュール有効化時のループ
+                repeat
+                    if entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
+                        local airTime = GetAirTime()
+                        
+                        -- 既にテレポート中で、終了時間になっていない場合は何もしない（待機中）
+                        if isTeleporting then
+                            if tick() < teleportEndTime then
+                                -- 待機中は落下速度を0に維持して浮遊させるなどの処理が必要ならここに入れる
+                                -- 今回は単純に位置を固定するか、あるいは自然落下させるかは要件によりますが
+                                -- 「時間が過ぎたら元の位置に戻る」ため、ここでは待機のみ行います
+                                task.wait(0.05)
+                                continue
+                            else
+                                -- 時間経過したので元の位置に戻る
+                                if originalPosition then
+                                    entitylib.character.RootPart.CFrame = CFrame.lookAlong(originalPosition, entitylib.character.RootPart.CFrame.LookVector)
+                                    -- 速度リセット（必要に応じて）
+                                    entitylib.character.RootPart.AssemblyLinearVelocity = Vector3.zero
+                                end
+                                isTeleporting = false
+                                originalPosition = nil
+                            end
+                        end
+                        
+                        -- テレポート中でない且つ、空中時間が2秒超過した場合
+                        if not isTeleporting and airTime > 2 then
+                            local root = entitylib.character.RootPart
+                            local startPos = root.Position
+                            
+                            -- 下方向にRaycast
+                            local rayResult = workspace:Raycast(startPos, Vector3.new(0, -1000, 0), RayParams)
+                            
+                            if rayResult then
+                                -- 地面を検出
+                                local hitPos = rayResult.Position
+                                local hitNormal = rayResult.Normal
+                                
+                                -- ヒット位置の少し上（キャラクターが埋まらないように）にテレポート
+                                -- HipHeightなどを考慮して調整
+                                local targetPos = hitPos + (hitNormal * (entitylib.character.HipHeight + 2)) 
+                                
+                                -- 元の位置を保存
+                                originalPosition = root.CFrame.p
+                                
+                                -- テレポート実行
+                                root.CFrame = CFrame.lookAlong(targetPos, root.CFrame.LookVector)
+                                root.AssemblyLinearVelocity = Vector3.zero
+                                
+                                -- 状態更新
+                                isTeleporting = true
+                                teleportEndTime = tick() + Duration.Value
+                            end
+                        end
+                    end
+                    task.wait(0.05)
+                until not TPDown.Enabled
+            else
+                -- モジュール無効化時のクリーンアップ
+                isTeleporting = false
+                originalPosition = nil
+            end
+        end,
+        Tooltip = 'Teleports you to the ground if you fall for more than 2 seconds, stays for a set duration, then returns.'
+    })
+
+    Duration = TPDown:CreateSlider({
+        Name = 'Ground Duration',
+        Min = 0.1,
+        Max = 1,
+        Default = 0.3,
+        Decimal = 10,
+        Suffix = 'seconds'
+    })
+end)
