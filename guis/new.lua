@@ -5811,6 +5811,18 @@ mainapi:CreateCategory({
 	Size = UDim2.fromOffset(15, 14)
 })
 
+mainapi:CreateCategory({
+	Name = 'Rage',
+	Icon = getcustomasset('newvape/assets/new/utilityicon.png'),
+	Size = UDim2.fromOffset(15, 14)
+})
+
+mainapi:CreateCategory({
+	Name = 'oldModule',
+	Icon = getcustomasset('newvape/assets/new/utilityicon.png'),
+	Size = UDim2.fromOffset(15, 14)
+})
+
 mainapi.Categories.Main:CreateDivider('misc')
 
 --[[
