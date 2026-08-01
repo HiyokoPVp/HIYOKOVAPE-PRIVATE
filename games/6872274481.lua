@@ -83,7 +83,7 @@ local function addBlur(parent)
 	blur.Size = UDim2.new(1, 89, 1, 52)
 	blur.Position = UDim2.fromOffset(-48, -31)
 	blur.BackgroundTransparency = 1
-	blur.Image = getcustomasset('pistonware/assets/new/blur.png')
+	blur.Image = getcustomasset('newvape/assets/new/blur.png')
 	blur.ScaleType = Enum.ScaleType.Slice
 	blur.SliceCenter = Rect.new(52, 31, 261, 502)
 	blur.Parent = parent
@@ -668,12 +668,10 @@ run(function()
 end)
 entitylib.start()
 
--- pistonware funcs
+
 
 local genv = getgenv()
--- Idempotent shared-state defaults: fill a key only if a previous execution
--- hasn't already set it. Add new flags here instead of another line below.
--- (== nil, not `or`, so a stored `false` is never clobbered back to default.)
+
 for key, default in pairs({
 	AntiLagbackDelayFactor   = 1,
 	IsLongJumping            = false,
@@ -854,7 +852,7 @@ local function safeGetProto(func, index)
     end
 end
 
--- pistonware funcs
+
 
 run(function()
 	local KnitInit, Knit
@@ -992,7 +990,7 @@ run(function()
 	for i, v in remoteNames do
 		local remote = dumpRemote(debug.getconstants(v))
 		if remote == '' then
-			notif('Pistonware', 'Failed to grab remote ('..i..')', 10, 'alert')
+			notif('HiyokoVape', 'Failed to grab remote ('..i..')', 10, 'alert')
 		end
 		remotes[i] = remote
 	end
