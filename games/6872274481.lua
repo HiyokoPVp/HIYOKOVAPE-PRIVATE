@@ -14271,8 +14271,12 @@ run(function()
                     if not entitylib.isAlive then return end
                     
                     local root = entitylib.character.RootPart
+                    local hum = entitylib.character.Humanoid
                     
-                    if inputService:IsKeyDown(Enum.KeyCode.Space) then
+                    -- PCのSpaceキー または スマホのジャンプボタン押下を検知
+                    local isJumping = inputService:IsKeyDown(Enum.KeyCode.Space) or (hum and hum.Jump)
+                    
+                    if isJumping then
                         root.Velocity = Vector3.new(root.Velocity.X, Height.Value, root.Velocity.Z)
                     end
                 end))
