@@ -2711,8 +2711,8 @@ run(function()
 	Value = Fly:CreateSlider({
 		Name = 'Speed',
 		Min = 1,
-		Max = 23,
-		Default = 23,
+		Max = 22,
+		Default = 22,
 		Suffix = function(val)
 			return val == 1 and 'stud' or 'studs'
 		end
@@ -4132,8 +4132,8 @@ run(function()
 	Value = Speed:CreateSlider({
 		Name = 'Speed',
 		Min = 1,
-		Max = 23,
-		Default = 23,
+		Max = 22,
+		Default = 22,
 		Suffix = function(val)
 			return val == 1 and 'stud' or 'studs'
 		end
