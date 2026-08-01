@@ -36,6 +36,8 @@ local cloneref = cloneref or function(obj)
 	return obj
 end
 
+print(123)
+
 local playersService = cloneref(game:GetService('Players'))
 local replicatedStorage = cloneref(game:GetService('ReplicatedStorage'))
 local runService = cloneref(game:GetService('RunService'))
