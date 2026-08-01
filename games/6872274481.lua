@@ -2371,21 +2371,33 @@ run(function()
 				bedwars.BalloonController.deflateBalloon = function() end
 				local tpTick, tpToggle, oldy = tick(), true
 
-				if lplr.Character and (lplr.Character:GetAttribute('InflatedBalloons') or 0) == 0 and getItem('balloon') then
+				-- ============================================================
+				-- [修正1] TP Down 使用中はバルーンを膨らませない
+				-- 膨らませると flyAllowed=true になりバルーン浮遊モードに入って
+				-- TP Down のテレポートと mass 揺動が競合する（動画のバグ）
+				-- ============================================================
+				if not TP.Enabled and lplr.Character and (lplr.Character:GetAttribute('InflatedBalloons') or 0) == 0 and getItem('balloon') then
 					bedwars.BalloonController:inflateBalloon()
 				end
 				Fly:Clean(vapeEvents.AttributeChanged.Event:Connect(function(changed)
-					if changed == 'InflatedBalloons' and (lplr.Character:GetAttribute('InflatedBalloons') or 0) == 0 and getItem('balloon') then
+					if not TP.Enabled and changed == 'InflatedBalloons' and (lplr.Character:GetAttribute('InflatedBalloons') or 0) == 0 and getItem('balloon') then
 						bedwars.BalloonController:inflateBalloon()
 					end
 				end))
+
 				Fly:Clean(runService.PreSimulation:Connect(function(dt)
 					if entitylib.isAlive and not InfiniteFly.Enabled and isnetworkowner(entitylib.character.RootPart) then
-						local flyAllowed = (lplr.Character:GetAttribute('InflatedBalloons') and lplr.Character:GetAttribute('InflatedBalloons') > 0) or store.matchState == 2
+						-- ============================================================
+						-- [修正2] TP Down 使用中は flyAllowed を強制 false
+						-- → mass が 1.5 固定（揺動なし）になり TP Down と競合しない
+						-- → かつ下の if not flyAllowed then ブロックに入れる
+						-- ============================================================
+						local flyAllowed = (not TP.Enabled) and ((lplr.Character:GetAttribute('InflatedBalloons') and lplr.Character:GetAttribute('InflatedBalloons') > 0) or store.matchState == 2)
 						local mass = (1.5 + (flyAllowed and 6 or 0) * (tick() % 0.4 < 0.2 and -1 or 1)) + ((up + down) * VerticalValue.Value)
 						local root, moveDirection = entitylib.character.RootPart, entitylib.character.Humanoid.MoveDirection
 						local velo = getSpeed()
 						local destination = (moveDirection * math.max(Value.Value - velo, 0) * dt)
+
 						rayCheck.FilterDescendantsInstances = {lplr.Character, gameCamera, AntiFallPart}
 						rayCheck.CollisionGroup = root.CollisionGroup
 
@@ -2396,6 +2408,11 @@ run(function()
 							end
 						end
 
+						-- ============================================================
+						-- [修正3] TP Down 本体は元の通り if not flyAllowed then の中
+						-- 前回のように外へ出さない（出すとバルーン浮遊と競合する）
+						-- flyAllowed は修正2で TP 中に false 化済みなのでここに入れる
+						-- ============================================================
 						if not flyAllowed then
 							if tpToggle then
 								local airleft = (tick() - entitylib.character.AirTime)
@@ -2428,6 +2445,7 @@ run(function()
 						root.AssemblyLinearVelocity = (moveDirection * velo) + Vector3.new(0, mass, 0)
 					end
 				end))
+
 				Fly:Clean(inputService.InputBegan:Connect(function(input)
 					if not inputService:GetFocusedTextBox() then
 						if input.KeyCode == Enum.KeyCode.Space or input.KeyCode == Enum.KeyCode.ButtonA then
@@ -2466,6 +2484,7 @@ run(function()
 		end,
 		Tooltip = 'Makes you go zoom.'
 	})
+
 	Value = Fly:CreateSlider({
 		Name = 'Speed',
 		Min = 1,
