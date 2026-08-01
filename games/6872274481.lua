@@ -18,19 +18,6 @@ end
 
 local function safeGetProto(func, index)
     if not func then return nil end
-    local success, proto = pcall(debug.getproto, func, index)
-    if success then
-        return proto
-    else
-        warn("function:", func, "index:", index)
-        return nil
-    end
-end
-
--- if not work try this and change EquipItem upvalue to 3
-
-local function FixedsafeGetProto(func, index)
-    if not func then return nil end
     local success, proto = pcall(debug.getconstant, func, index)
     if success then
         return proto
@@ -1124,7 +1111,7 @@ run(function()
 		DragonEndFly = safeGetProto(Knit.Controllers.VoidDragonController.flapWings, 1),
 		DragonFly = Knit.Controllers.VoidDragonController.flapWings,
 		DropItem = Knit.Controllers.ItemDropController.dropItemInHand,
-		EquipItem = safeGetProto(require(replicatedStorage.TS.entity.entities['inventory-entity']).InventoryEntity.equipItem, 4),
+		EquipItem = safeGetProto(require(replicatedStorage.TS.entity.entities['inventory-entity']).InventoryEntity.equipItem, 3),
 		FireProjectile = debug.getupvalue(Knit.Controllers.ProjectileController.launchProjectileWithValues, 2),
 		GroundHit = Knit.Controllers.FallDamageController.KnitStart,
 		GuitarHeal = Knit.Controllers.GuitarController.performHeal,
