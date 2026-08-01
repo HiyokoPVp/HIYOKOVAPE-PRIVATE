@@ -14632,114 +14632,88 @@ run(function()
     })
 end)
 
--- SessionInfoへの登録 (常時記録用)
-local lagBackCounter = sessioninfo:AddItem('LagBacks')
-local globalLagCount = 0
+run(function()
+    local vape = shared.vape
+    if not vape or not vape.Categories or not vape.Categories.Render then return end
 
--- カウントをリセットする関数
-local function resetLagCount()
-    globalLagCount = 0
-    if lagBackCounter then
-        -- SetValueで強制的に0にする
-        lagBackCounter:SetValue(0)
-    end
-end
+    local entitylib = vape.Libraries and vape.Libraries.entity
 
--- リセット用の接続を管理するテーブル
-local resetConnections = {}
+    local LagBackDetector
+    local Notifications
+    local Interval
 
--- 1. マッチ終了時にリセット
-table.insert(resetConnections, vapeEvents.MatchEndEvent.Event:Connect(function()
-    resetLagCount()
-end))
+    local lagging = false
+    local initialized = false
 
--- 2. 新しいキャラクターが生成された瞬間（新規マッチ開始）にリセット
--- entitylib.Events.LocalAdded は respawn 時に発火するため、ここでリセットするのが確実です
-table.insert(resetConnections, entitylib.Events.LocalAdded:Connect(function()
-    -- 誤検知を防ぐため、少し待ってからリセットする場合もありますが、
-    -- 即時リセットの方が「前のゲームの持ち越し」を防げます
-    resetLagCount()
-end))
+    local rawIsNetworkOwner = isnetworkowner
 
--- スクリプト終了時に接続を解除（メモリリーク防止）
-vape:Clean(function()
-    for _, conn in ipairs(resetConnections) do
-        pcall(function() conn:Disconnect() end)
-    end
-    table.clear(resetConnections)
-end)
+    local function notify(msg, alert)
+        if Notifications and not Notifications.Enabled then return end
 
--- 裏で常にネットワーク所有権を監視してSessionInfoに記録するスレッド
-task.spawn(function()
-    local lastState = nil
-    while task.wait(0.1) do -- 負荷軽減のため0.1秒間隔でチェック
-        if entitylib.isAlive and entitylib.character.RootPart then
-            local current = isnetworkowner(entitylib.character.RootPart)
-            
-            -- True -> False/Nil の変化を検知
-            if lastState == true and (current == false or current == nil) then
-                globalLagCount += 1
-                if lagBackCounter then
-                    lagBackCounter:Increment()
-                end
-            end
-            
-            lastState = current
+        if alert then
+            vape:CreateNotification('LagBackDetector', msg, 5, 'alert')
         else
-            -- キャラクターが存在しない場合は状態をリセット
-            lastState = nil
+            vape:CreateNotification('LagBackDetector', msg, 5)
         end
     end
-end)
 
-run(function()
-    local LagBack
-    local lastOwnerState = nil
-    
-    LagBack = vape.Categories.AntiCheat:CreateModule({
-        Name = 'LagBack',
+    LagBackDetector = vape.Categories.Render:CreateModule({
+        Name = 'LagBackDetector',
         Function = function(callback)
             if callback then
-                -- 初期状態取得
-                if entitylib.isAlive and entitylib.character.RootPart then
-                    lastOwnerState = isnetworkowner(entitylib.character.RootPart)
-                else
-                    lastOwnerState = nil
-                end
-                
-                LagBack:Clean(runService.PreSimulation:Connect(function()
-                    if not entitylib.isAlive or not entitylib.character.RootPart then
-                        lastOwnerState = nil
-                        return
-                    end
+                local active = true
 
-                    local currentOwner = isnetworkowner(entitylib.character.RootPart)
-                    
-                    if currentOwner ~= lastOwnerState then
-                        -- False/Nilになった瞬間 (LagBack発生通知)
-                        if lastOwnerState == true and (currentOwner == false or currentOwner == nil) then
-                            notif('LagBack', 'Network ownership lost!', 3, 'alert')
-                        
-                        -- Trueに戻った瞬間 (復帰通知)
-                        elseif (lastOwnerState == false or lastOwnerState == nil) and currentOwner == true then
-                            notif('LagBack', 'Network ownership restored.', 2, 'success')
+                LagBackDetector:Clean(function()
+                    active = false
+                end)
+
+                task.spawn(function()
+                    while active and LagBackDetector.Enabled do
+                        if entitylib and entitylib.isAlive and entitylib.character and entitylib.character.RootPart then
+                            local ok, clientOwned = pcall(rawIsNetworkOwner, entitylib.character.RootPart)
+
+                            if ok then
+                                local isLagback = not clientOwned
+
+                                if not initialized then
+                                    initialized = true
+                                    lagging = isLagback
+
+                                    if isLagback then
+                                        notify('Lagback detected! Network ownership is server-side.', true)
+                                    end
+                                elseif isLagback and not lagging then
+                                    notify('Lagback detected! Network ownership is server-side.', true)
+                                    lagging = true
+                                elseif not isLagback and lagging then
+                                    notify('Lagback resolved! Network ownership returned to client.', false)
+                                    lagging = false
+                                end
+                            end
                         end
-                        
-                        lastOwnerState = currentOwner
+
+                        task.wait(Interval and Interval.Value or 0.1)
                     end
-                end))
-                
-                -- リスポーン時のリセット
-                LagBack:Clean(entitylib.Events.LocalAdded:Connect(function()
-                    task.wait(0.5)
-                    if entitylib.isAlive and entitylib.character.RootPart then
-                        lastOwnerState = isnetworkowner(entitylib.character.RootPart)
-                    end
-                end))
+                end)
             else
-                lastOwnerState = nil
+                lagging = false
+                initialized = false
             end
         end,
-        Tooltip = 'Notifies when you lose/regain network ownership.'
+        Tooltip = 'Notifies when isnetworkowner returns false on your RootPart.',
+    })
+
+    Notifications = LagBackDetector:CreateToggle({
+        Name = 'Notifications',
+        Default = true,
+    })
+
+    Interval = LagBackDetector:CreateSlider({
+        Name = 'Check interval',
+        Min = 0.05,
+        Max = 1,
+        Default = 0.1,
+        Decimal = 100,
+        Suffix = 's',
     })
 end)
