@@ -14637,6 +14637,7 @@ local globalLagCount = 0
 
 task.spawn(function()
     local lastState = nil
+	globalLagCount = 0
     while task.wait(0.1) do 
         if entitylib.isAlive and entitylib.character.RootPart then
             local current = isnetworkowner(entitylib.character.RootPart)
