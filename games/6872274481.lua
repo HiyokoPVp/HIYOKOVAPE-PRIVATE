@@ -14729,6 +14729,7 @@ run(function()
     local isTeleporting = false
     local teleportEndTime = 0
     local originalPosition = nil
+    local hasTeleportedThisFall = false -- 1回の落下で1回だけ発動させるフラグ
     
     -- キャラクターロック用の変数
     local oldWalkSpeed = 16
@@ -14741,26 +14742,34 @@ run(function()
                 repeat
                     if entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
                         local airTime = GetAirTime()
+                        local humanoid = entitylib.character.Humanoid
+                        local root = entitylib.character.RootPart
+                        
+                        -- 着地（地上に戻った）したら「1回TP済みフラグ」をリセット
+                        if airTime == 0 or (humanoid and humanoid:GetState() == Enum.HumanoidStateType.Landed) then
+                            hasTeleportedThisFall = false
+                        end
                         
                         -- テレポート（ロック）中の処理
                         if isTeleporting then
-                            local root = entitylib.character.RootPart
-                            local humanoid = entitylib.character.Humanoid
-                            
                             if tick() < teleportEndTime then
-                                -- ロック中: 移動スピードを消し、位置がずれないよう固定
+                                -- ロック中: 移動・速度・回転を完全に殺す
                                 root.AssemblyLinearVelocity = Vector3.zero
                                 root.AssemblyAngularVelocity = Vector3.zero
+                                if humanoid then
+                                    humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false) -- ジャンプ入力自体を禁止
+                                end
                                 task.wait(0.05)
                                 continue
                             else
-                                -- ロック解除: 元の位置に戻してロックを戻す
+                                -- ロック解除: 元の位置に戻す
                                 if originalPosition then
                                     root.CFrame = CFrame.lookAlong(originalPosition, root.CFrame.LookVector)
                                     root.AssemblyLinearVelocity = Vector3.zero
+                                    root.AssemblyAngularVelocity = Vector3.zero
                                 end
                                 
-                                -- キャラクターの移動・ジャンプ制限を解除
+                                -- ロック解除（移動・ジャンプの許可）
                                 if humanoid then
                                     humanoid.WalkSpeed = oldWalkSpeed
                                     if humanoid.UseJumpPower then
@@ -14768,18 +14777,19 @@ run(function()
                                     else
                                         humanoid.JumpHeight = oldJumpPower
                                     end
+                                    humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
                                 end
                                 
                                 isTeleporting = false
                                 originalPosition = nil
+                                -- 連打防止のために少しクールダウンを入れる
+                                task.wait(0.5)
                             end
                         end
                         
-                        -- 発動条件: テレポ中ではなく、空中時間が2秒超過
-                        if not isTeleporting and airTime > 2 then
-                            local root = entitylib.character.RootPart
+                        -- 発動条件: テレポ中ではなく、1回の落下でまだTPしておらず、空中時間が2秒超過
+                        if not isTeleporting and not hasTeleportedThisFall and airTime > 2 then
                             local char = entitylib.character.Character or lplr.Character
-                            local humanoid = entitylib.character.Humanoid
                             
                             -- 最新のキャラクターを除外対象に設定
                             local RayParams = RaycastParams.new()
@@ -14792,20 +14802,11 @@ run(function()
                             
                             if ray then
                                 originalPosition = root.Position
+                                hasTeleportedThisFall = true -- 1回だけ発動させるフラグをオン
                                 
-                                -- 地面にピッタリ着地させるための計算
-                                -- R15 / R6 のHumanoidにおける正確な足元高さ
-                                local hipHeight = 0
-                                if humanoid then
-                                    hipHeight = humanoid.HipHeight
-                                    -- R6の場合はHipHeightが0になることがあるため、その場合はRootPartからの距離で調整
-                                    if hipHeight == 0 then
-                                        hipHeight = 1.5 
-                                    end
-                                end
-                                
-                                -- 宙に浮かないよう微調整値 (-0.15) を引いたピッタリ高度
-                                local exactGroundY = ray.Position.Y + hipHeight + (root.Size.Y / 2) - 0.15
+                                -- 地面にピッタリ着地させるための正確な高さ計算
+                                local hipHeight = (humanoid and humanoid.HipHeight > 0) and humanoid.HipHeight or 2
+                                local exactGroundY = ray.Position.Y + hipHeight + (root.Size.Y / 2) - 0.2
                                 
                                 -- 地面にテレポート
                                 root.CFrame = CFrame.lookAlong(
@@ -14815,7 +14816,7 @@ run(function()
                                 root.AssemblyLinearVelocity = Vector3.zero
                                 root.AssemblyAngularVelocity = Vector3.zero
                                 
-                                -- キャラクターをロック（移動・ジャンプを無効化）
+                                -- キャラクター完全ロック（移動・ジャンプ・状態禁止）
                                 if humanoid then
                                     oldWalkSpeed = humanoid.WalkSpeed
                                     oldJumpPower = humanoid.UseJumpPower and humanoid.JumpPower or humanoid.JumpHeight
@@ -14826,9 +14827,11 @@ run(function()
                                     else
                                         humanoid.JumpHeight = 0
                                     end
+                                    humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, false) -- ジャンプ状態化をブロック
+                                    humanoid:ChangeState(Enum.HumanoidStateType.Landed) -- 強制的に着地状態にする
                                 end
                                 
-                                -- 通知
+                                -- 通知（1回だけ送る）
                                 if Notify and Notify.Enabled then
                                     vape:CreateNotification('TPDown', 'Teleported & Locked', 2)
                                 end
@@ -14842,28 +14845,23 @@ run(function()
                 until not TPDown.Enabled
             else
                 -- 無効化時のクリーンアップ
-                if isTeleporting and entitylib.isAlive then
+                if entitylib.isAlive and entitylib.character.Humanoid then
                     local humanoid = entitylib.character.Humanoid
-                    if humanoid then
-                        humanoid.WalkSpeed = oldWalkSpeed
-                        if humanoid.UseJumpPower then
-                            humanoid.JumpPower = oldJumpPower
-                        else
-                            humanoid.JumpHeight = oldJumpPower
-                        end
-                    end
+                    humanoid.WalkSpeed = oldWalkSpeed
+                    humanoid:SetStateEnabled(Enum.HumanoidStateType.Jumping, true)
                 end
                 isTeleporting = false
+                hasTeleportedThisFall = false
                 originalPosition = nil
             end
         end,
-        Tooltip = 'Teleports and locks you to the ground if you fall for more than 2 seconds.'
+        Tooltip = 'Teleports and locks you to the ground once per fall.'
     })
 
     Duration = TPDown:CreateSlider({
         Name = 'Ground Duration',
         Min = 0.01,
-        Max = 0.2,
+        Max = 0.5,
         Default = 0.1,
         Decimal = 100,
         Suffix = 'seconds'
