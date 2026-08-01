@@ -14724,6 +14724,7 @@ end)
 run(function()
     local TPDown
     local Duration
+    local Notify -- 通知用オプション
     local RayParams = RaycastParams.new()
     RayParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
     
@@ -14731,7 +14732,6 @@ run(function()
     local isTeleporting = false
     local teleportEndTime = 0
     local originalPosition = nil
-    local returnConnection = nil
 
     TPDown = vape.Categories.AntiCheat:CreateModule({
         Name = 'TPDown',
@@ -14742,19 +14742,15 @@ run(function()
                     if entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
                         local airTime = GetAirTime()
                         
-                        -- 既にテレポート中で、終了時間になっていない場合は何もしない（待機中）
+                        -- 既にテレポート中で、終了時間になっていない場合は待機
                         if isTeleporting then
                             if tick() < teleportEndTime then
-                                -- 待機中は落下速度を0に維持して浮遊させるなどの処理が必要ならここに入れる
-                                -- 今回は単純に位置を固定するか、あるいは自然落下させるかは要件によりますが
-                                -- 「時間が過ぎたら元の位置に戻る」ため、ここでは待機のみ行います
                                 task.wait(0.05)
                                 continue
                             else
                                 -- 時間経過したので元の位置に戻る
                                 if originalPosition then
                                     entitylib.character.RootPart.CFrame = CFrame.lookAlong(originalPosition, entitylib.character.RootPart.CFrame.LookVector)
-                                    -- 速度リセット（必要に応じて）
                                     entitylib.character.RootPart.AssemblyLinearVelocity = Vector3.zero
                                 end
                                 isTeleporting = false
@@ -14775,8 +14771,7 @@ run(function()
                                 local hitPos = rayResult.Position
                                 local hitNormal = rayResult.Normal
                                 
-                                -- ヒット位置の少し上（キャラクターが埋まらないように）にテレポート
-                                -- HipHeightなどを考慮して調整
+                                -- ヒット位置の少し上にテレポート
                                 local targetPos = hitPos + (hitNormal * (entitylib.character.HipHeight + 2)) 
                                 
                                 -- 元の位置を保存
@@ -14785,6 +14780,11 @@ run(function()
                                 -- テレポート実行
                                 root.CFrame = CFrame.lookAlong(targetPos, root.CFrame.LookVector)
                                 root.AssemblyLinearVelocity = Vector3.zero
+                                
+                                -- 通知機能
+                                if Notify.Enabled then
+                                    vape:CreateNotification('TPDown', 'Teleported to ground', 2)
+                                end
                                 
                                 -- 状態更新
                                 isTeleporting = true
@@ -14800,15 +14800,21 @@ run(function()
                 originalPosition = nil
             end
         end,
-        Tooltip = 'Teleports you to the ground if you fall for more than 2 seconds, stays for a set duration, then returns.'
+        Tooltip = 'Teleports you to the ground if you fall for more than 2 seconds.'
     })
 
     Duration = TPDown:CreateSlider({
         Name = 'Ground Duration',
-        Min = 0.1,
-        Max = 1,
-        Default = 0.3,
-        Decimal = 10,
+        Min = 0.01,
+        Max = 0.2,
+        Default = 0.1,
+        Decimal = 100,
         Suffix = 'seconds'
+    })
+
+    Notify = TPDown:CreateToggle({
+        Name = 'Notify',
+        Default = false,
+        Tooltip = 'Show notification when teleported'
     })
 end)
