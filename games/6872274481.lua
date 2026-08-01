@@ -127,6 +127,7 @@ local Reach = {}
 local HitBoxes = {}
 local TrapDisabler
 local AntiFallPart
+local InfiniteFly = {}
 local bedwars, remotes, sides, oldinvrender, oldSwing = {}, {}, {}
 local originalKnit
 local function getAccountTier(player)
