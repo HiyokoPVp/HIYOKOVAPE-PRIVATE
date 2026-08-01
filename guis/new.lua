@@ -5800,22 +5800,17 @@ mainapi:CreateCategory({
 })
 
 mainapi:CreateCategory({
-	Name = 'ACTHINGS',
+	Name = 'AntiCheat',
 	Icon = getcustomasset('newvape/assets/new/utilityicon.png'),
 	Size = UDim2.fromOffset(15, 14)
 })
 
 mainapi:CreateCategory({
-	Name = 'KIT',
+	Name = 'Kit',
 	Icon = getcustomasset('newvape/assets/new/utilityicon.png'),
 	Size = UDim2.fromOffset(15, 14)
 })
 
-mainapi:CreateCategory({
-	Name = 'HIYOKOVAPEFEATURE',
-	Icon = getcustomasset('newvape/assets/new/utilityicon.png'),
-	Size = UDim2.fromOffset(15, 14)
-})
 mainapi.Categories.Main:CreateDivider('misc')
 
 --[[
