@@ -14294,7 +14294,7 @@ end)
 run(function()
     local old
 
-    vape.Categories.Blatant:CreateModule({
+    vape.Categories.Kit:CreateModule({
     	Name = 'Infinite Krystal',
     	Tooltip = 'Gives you max momentum forever',
     	Function = function(call)
