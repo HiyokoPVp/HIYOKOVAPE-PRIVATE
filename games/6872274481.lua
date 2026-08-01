@@ -68,6 +68,33 @@ local prediction = vape.Libraries.prediction
 local getfontsize = vape.Libraries.getfontsize
 local getcustomasset = vape.Libraries.getcustomasset
 
+local airStart = nil
+
+local function GetAirTime()
+	local character = entitylib.character
+	if not character or not character.Humanoid then
+		return 0
+	end
+
+	local humanoid = character.Humanoid
+	local state = humanoid:GetState()
+
+	local airborne =
+		state == Enum.HumanoidStateType.Freefall
+		or state == Enum.HumanoidStateType.Jumping
+
+	if airborne then
+		if not airStart then
+			airStart = tick()
+		end
+		
+		return tick() - airStart
+	else
+		airStart = nil
+		return 0
+	end
+end
+
 local store = {
     attackReach = 0,
     attackReachUpdate = tick(),
@@ -2612,7 +2639,7 @@ run(function()
 
 						if not flyAllowed then
 							if tpToggle then
-								local airleft = (tick() - entitylib.character.AirTime)
+								local airleft = GetAirTime()
 								print(airleft)
 								if airleft > 2 then
 									if not oldy then
