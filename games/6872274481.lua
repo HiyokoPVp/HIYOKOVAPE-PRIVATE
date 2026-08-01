@@ -14884,3 +14884,287 @@ run(function()
         Tooltip = 'Show notification when teleported'
     })
 end)
+
+run(function()
+    local AntiHit
+    local Height
+    local AirTime
+    local GroundTime
+    local OnlyTargeting
+    local TargetRange
+
+    -- 地面検出用Raycast設定
+    local groundRay = RaycastParams.new()
+    groundRay.RespectCanCollide = true
+
+    -- カメラ補正が有効か（実際にテレポート中のみtrue）
+    local antiHitActive = false
+    -- BindToRenderStep用ユニーク名
+    local camBindName = 'AntiHitCamFix'
+
+    -------------------------------------------------------
+    -- 近くに敵がいるかチェック
+    -------------------------------------------------------
+    local function isEnemyNearby()
+        if not OnlyTargeting.Enabled then
+            return true
+        end
+        local ent = entitylib.EntityPosition({
+            Range = TargetRange.Value,
+            Part = 'RootPart',
+            Players = true,
+            NPCs = false,
+            Wallcheck = true,
+        })
+        return ent ~= nil
+    end
+
+    -------------------------------------------------------
+    -- 頭上にブロックがないか（窒息 = SUFFOCATE 防止）
+    -------------------------------------------------------
+    local function isHeadClear(pos, root)
+        local hip = entitylib.character.HipHeight or 2
+        local params = RaycastParams.new()
+        params.FilterDescendantsInstances = {lplr.Character, gameCamera}
+        params.FilterType = Enum.RaycastFilterType.Exclude
+        params.RespectCanCollide = true
+        params.CollisionGroup = root.CollisionGroup
+        local origin = pos + Vector3.new(0, root.Size.Y / 2, 0)
+        local hit = workspace:Raycast(origin, Vector3.new(0, hip * 2 + 1, 0), params)
+        return hit == nil
+    end
+
+    -------------------------------------------------------
+    -- 全身がブロックにめり込んでいないか（上空テレポート用）
+    -------------------------------------------------------
+    local function isBodyClear(pos, root)
+        local hip = entitylib.character.HipHeight or 2
+        local size = root.Size + Vector3.new(0.5, hip * 2, 0.5)
+        local overlap = OverlapParams.new()
+        overlap.FilterDescendantsInstances = {lplr.Character, gameCamera}
+        overlap.FilterType = Enum.RaycastFilterType.Exclude
+        overlap.RespectCanCollide = true
+        return #workspace:GetPartBoundsInBox(CFrame.new(pos), size, overlap) == 0
+    end
+
+    -------------------------------------------------------
+    -- カメラ補正（向きはそのまま / 位置Yだけ地面に固定）
+    -------------------------------------------------------
+    local function bindCameraFix()
+        runService:BindToRenderStep(
+            camBindName,
+            Enum.RenderPriority.Camera.Value + 5,
+            function()
+                if not antiHitActive or not entitylib.isAlive then
+                    return
+                end
+
+                local root = entitylib.character.RootPart
+
+                groundRay.FilterDescendantsInstances = {lplr.Character, gameCamera}
+                groundRay.CollisionGroup = root.CollisionGroup
+                local ray = workspace:Raycast(
+                    root.Position + Vector3.new(0, 2, 0),
+                    Vector3.new(0, -500, 0),
+                    groundRay
+                )
+                if not ray then
+                    return
+                end
+
+                local groundY = ray.Position.Y + (entitylib.character.HipHeight or 2)
+                local focus = Vector3.new(root.Position.X, groundY + 1, root.Position.Z)
+
+                local cf = gameCamera.CFrame
+                local look = cf.LookVector
+
+                local dist = (gameCamera.Focus.Position - cf.Position).Magnitude
+                if not (dist == dist) or dist < 0.1 then
+                    dist = 0.5
+                end
+
+                local newPos = focus - look * dist
+                gameCamera.CFrame = CFrame.fromMatrix(newPos, cf.RightVector, cf.UpVector)
+            end
+        )
+    end
+
+    -------------------------------------------------------
+    -- モジュール本体
+    -------------------------------------------------------
+    AntiHit = vape.Categories.Blatant:CreateModule({
+        Name = 'AntiHit',
+        Function = function(callback)
+            if callback then
+                antiHitActive = false
+
+                bindCameraFix()
+                AntiHit:Clean(function()
+                    pcall(function()
+                        runService:UnbindFromRenderStep(camBindName)
+                    end)
+                    -- クリーンアップ時にアンカーを解除
+                    if entitylib.character and entitylib.character.RootPart then
+                        entitylib.character.RootPart.Anchored = false
+                    end
+                    antiHitActive = false
+                end)
+
+                -- メインループ
+                task.spawn(function()
+                    while AntiHit.Enabled do
+                        local root = entitylib.character and entitylib.character.RootPart
+                        local alive = entitylib.isAlive
+                        local owner = root and isnetworkowner(root)
+
+                        -- 生存 / 所有チェック
+                        if not alive or not owner then
+                            if root and root.Anchored then root.Anchored = false end
+                            antiHitActive = false
+                            task.wait(0.1)
+                            continue
+                        end
+
+                        -- OnlyTargeting スキップ時
+                        if not isEnemyNearby() then
+                            if root and root.Anchored then root.Anchored = false end
+                            antiHitActive = false
+                            task.wait(0.1)
+                            continue
+                        end
+
+                        antiHitActive = true
+
+                        local hip = entitylib.character.HipHeight or 2
+
+                        -- ① 高く飛ぶ（天井＆めり込みチェック付き）
+                        local skyY = Height.Value
+                        local upParams = RaycastParams.new()
+                        upParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
+                        upParams.FilterType = Enum.RaycastFilterType.Exclude
+                        upParams.RespectCanCollide = true
+                        upParams.CollisionGroup = root.CollisionGroup
+                        local upRay = workspace:Raycast(
+                            root.Position + Vector3.new(0, 2, 0),
+                            Vector3.new(0, math.max(skyY - root.Position.Y, 1), 0),
+                            upParams
+                        )
+                        if upRay then
+                            skyY = upRay.Position.Y - (hip + 2)
+                            if skyY < root.Position.Y + 3 then
+                                skyY = root.Position.Y + 3
+                            end
+                        end
+                        local skyPos = Vector3.new(root.Position.X, skyY, root.Position.Z)
+                        if isBodyClear(skyPos, root) then
+                            root.CFrame = CFrame.new(skyPos)
+                            -- ★ 修正：上空に飛ばした瞬間に完全ロック（物理・落下停止）
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            root.Anchored = true
+                        end
+
+                        -- ② 上空で待機（AirTimeの間固定される）
+                        task.wait(AirTime.Value)
+
+                        -- ★ 修正：地面移動の前にアンカーを必ず解除
+                        if root then
+                            root.Anchored = false
+                        end
+
+                        -- ③ 地面に戻る（奈落＆窒息チェック付き）
+                        if entitylib.isAlive and AntiHit.Enabled then
+                            local ray2 = workspace:Raycast(
+                                root.Position + Vector3.new(0, 2, 0),
+                                Vector3.new(0, -500, 0),
+                                groundRay
+                            )
+                            if ray2 then
+                                local returnY = ray2.Position.Y + hip
+                                local returnPos = Vector3.new(
+                                    root.Position.X, returnY, root.Position.Z
+                                )
+                                if isHeadClear(returnPos, root) then
+                                    root.CFrame = CFrame.new(returnPos)
+                                    root.AssemblyLinearVelocity = Vector3.zero
+                                end
+                            end
+                        end
+
+                        -- ④ 地面で待機
+                        task.wait(GroundTime.Value)
+                    end
+
+                    -- 無効化時にアンカー解除
+                    if entitylib.character and entitylib.character.RootPart then
+                        entitylib.character.RootPart.Anchored = false
+                    end
+                    antiHitActive = false
+                end)
+            else
+                -- 無効化時
+                pcall(function()
+                    runService:UnbindFromRenderStep(camBindName)
+                end)
+                if entitylib.character and entitylib.character.RootPart then
+                    entitylib.character.RootPart.Anchored = false
+                end
+                antiHitActive = false
+            end
+        end,
+        Tooltip = 'Dodges attacks by bouncing sky/ground. Camera stays normal (mouse aim intact); no suffocation/void.'
+    })
+
+    -------------------------------------------------------
+    -- オプション
+    -------------------------------------------------------
+    Height = AntiHit:CreateSlider({
+        Name = 'Height',
+        Min = 50,
+        Max = 500,
+        Default = 80,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+
+    AirTime = AntiHit:CreateSlider({
+        Name = 'Air Time',
+        Min = 0.1,
+        Max = 3,
+        Default = 0.7,
+        Decimal = 10,
+        Suffix = 'seconds'
+    })
+
+    GroundTime = AntiHit:CreateSlider({
+        Name = 'Ground Time',
+        Min = 0,
+        Max = 1,
+        Default = 0.1,
+        Decimal = 100,
+        Suffix = 'seconds'
+    })
+
+    OnlyTargeting = AntiHit:CreateToggle({
+        Name = 'Only Targeting',
+        Default = false,
+        Tooltip = 'Only activates when an enemy is nearby',
+        Function = function(callback)
+            if TargetRange and TargetRange.Object then
+                TargetRange.Object.Visible = callback
+            end
+        end
+    })
+
+    TargetRange = AntiHit:CreateSlider({
+        Name = 'Target Range',
+        Min = 5,
+        Max = 50,
+        Default = 30,
+        Darker = true,
+        Visible = false,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+end)
