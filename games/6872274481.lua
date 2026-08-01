@@ -14636,3 +14636,38 @@ run(function()
     })
 end)
 
+run(function()
+    local AutoTPDOWN
+    local rayCheck = RaycastParams.new()
+    rayCheck.RespectCanCollide = true
+
+    AutoTPDOWN = vape.Categories.Blatant:CreateModule({
+        Name = 'AutoTPDOWN',
+        Function = function(callback)
+            if callback then
+                AutoTPDOWN:Clean(runService.PreSimulation:Connect(function(dt)
+                    if entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
+                        local airleft = GetAirTime()
+                        
+                        -- 空中に2.4秒以上いた場合
+                        if airleft > 2.4 then
+                            local root = entitylib.character.RootPart
+                            rayCheck.FilterDescendantsInstances = {lplr.Character, gameCamera, AntiFallPart}
+                            rayCheck.CollisionGroup = root.CollisionGroup
+                            
+                            -- 真下に向かってレイキャスト（FlyのTP Downと同じ処理）
+                            local ray = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), rayCheck)
+                            if ray then
+                                root.CFrame = CFrame.lookAlong(
+                                    Vector3.new(root.Position.X, ray.Position.Y + entitylib.character.HipHeight, root.Position.Z), 
+                                    root.CFrame.LookVector
+                                )
+                            end
+                        end
+                    end
+                end))
+            end
+        end,
+        Tooltip = 'Automatically teleports you down to the ground if you are in the air for more than 2.4 seconds.'
+    })
+end)
