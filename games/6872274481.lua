@@ -56,32 +56,7 @@ local lplr = playersService.LocalPlayer
 local assetfunction = getcustomasset
 
 local vape = shared.vape
-if vape and not vape.Clean then
-	vape.Clean = function(self, conn)
-		if not conn then return end
-		
-		if not vape.Connections then
-			vape.Connections = {}
-		end
 
-		if self and self.Enabled then
-			vape.Connections[conn] = true
-			return conn
-		else
-			if vape.Connections[conn] then
-				if typeof(conn) == "RBXScriptConnection" then
-					pcall(conn.Disconnect, conn)
-				end
-				vape.Connections[conn] = nil
-			end
-		end
-	end
-end
-if vape and not vape.Remove then
-    vape.Remove = function(module) 
-		return module 
-	end
-end
 local entitylib = vape.Libraries.entity
 local targetinfo = vape.Libraries.targetinfo
 local sessioninfo = vape.Libraries.sessioninfo
@@ -2637,7 +2612,7 @@ run(function()
 
 						if not flyAllowed then
 							if tpToggle then
-								local airleft = entitylib.character.AirTime
+								local airleft = (tick() - entitylib.character.AirTime)
 								print(airleft)
 								if airleft > 2 then
 									if not oldy then
