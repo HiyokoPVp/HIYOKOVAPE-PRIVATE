@@ -14632,21 +14632,61 @@ run(function()
     })
 end)
 
+-- SessionInfoへの登録 (常時記録用)
 local lagBackCounter = sessioninfo:AddItem('LagBacks')
 local globalLagCount = 0
 
+-- カウントをリセットする関数
+local function resetLagCount()
+    globalLagCount = 0
+    if lagBackCounter then
+        -- SetValueで強制的に0にする
+        lagBackCounter:SetValue(0)
+    end
+end
+
+-- リセット用の接続を管理するテーブル
+local resetConnections = {}
+
+-- 1. マッチ終了時にリセット
+table.insert(resetConnections, vapeEvents.MatchEndEvent.Event:Connect(function()
+    resetLagCount()
+end))
+
+-- 2. 新しいキャラクターが生成された瞬間（新規マッチ開始）にリセット
+-- entitylib.Events.LocalAdded は respawn 時に発火するため、ここでリセットするのが確実です
+table.insert(resetConnections, entitylib.Events.LocalAdded:Connect(function()
+    -- 誤検知を防ぐため、少し待ってからリセットする場合もありますが、
+    -- 即時リセットの方が「前のゲームの持ち越し」を防げます
+    resetLagCount()
+end))
+
+-- スクリプト終了時に接続を解除（メモリリーク防止）
+vape:Clean(function()
+    for _, conn in ipairs(resetConnections) do
+        pcall(function() conn:Disconnect() end)
+    end
+    table.clear(resetConnections)
+end)
+
+-- 裏で常にネットワーク所有権を監視してSessionInfoに記録するスレッド
 task.spawn(function()
     local lastState = nil
-	lagBackCounter:SetValue(0)
-    while task.wait(0.1) do 
+    while task.wait(0.1) do -- 負荷軽減のため0.1秒間隔でチェック
         if entitylib.isAlive and entitylib.character.RootPart then
             local current = isnetworkowner(entitylib.character.RootPart)
+            
+            -- True -> False/Nil の変化を検知
             if lastState == true and (current == false or current == nil) then
                 globalLagCount += 1
-                lagBackCounter:Increment()
+                if lagBackCounter then
+                    lagBackCounter:Increment()
+                end
             end
+            
             lastState = current
         else
+            -- キャラクターが存在しない場合は状態をリセット
             lastState = nil
         end
     end
