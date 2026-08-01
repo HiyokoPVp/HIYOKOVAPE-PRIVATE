@@ -2,6 +2,8 @@ local run = function(func) if shared.VapeSmoothBoot then task.wait() end func() 
 
 print(123)
 
+print("にがにがしねいね")
+
 local cloneref = cloneref or function(obj)
 	return obj
 end
@@ -1488,3 +1490,5 @@ end)
 for _, v in {'AntiRagdoll', 'TriggerBot', 'SilentAim', 'AutoRejoin', 'Rejoin', 'Disabler', 'Timer', 'ServerHop', 'MouseTP', 'MurderMystery', 'Swim', 'Jesus', 'Invisible', 'Desync', 'Waypoints', 'PlayerModel', 'Schematica'} do
 	vape:Remove(v)
 end
+
+print("25PAN clan")
