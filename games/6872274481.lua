@@ -15061,11 +15061,10 @@ run(function()
                         -- ② 上空で待機（Y軸のみ固定＆落下速度ゼロ化）
                         local startTime = clock()
                         local airDuration = AirTime.Value
-                        local lockY = skyY -- ロック対象のY高度
+                        local lockY = skyY
 
                         while (clock() - startTime) < airDuration and AntiHit.Enabled and entitylib.isAlive do
                             if root and isnetworkowner(root) then
-                                -- Y位置のズレを打ち消しつつ、落下速度(Y)のみ0にリセット
                                 local currentPos = root.Position
                                 root.CFrame = CFrame.new(currentPos.X, lockY, currentPos.Z) * (root.CFrame - root.CFrame.Position)
                                 root.AssemblyLinearVelocity = Vector3.new(
@@ -15149,7 +15148,7 @@ run(function()
         Default = false,
         Tooltip = 'Only activates when an enemy is nearby',
         Function = function(callback)
-            if TargetRange and TargetRange.Object me
+            if TargetRange and TargetRange.Object then
                 TargetRange.Object.Visible = callback
             end
         end
