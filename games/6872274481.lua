@@ -15003,10 +15003,6 @@ run(function()
                     pcall(function()
                         runService:UnbindFromRenderStep(camBindName)
                     end)
-                    -- クリーンアップ時にアンカーを解除
-                    if entitylib.character and entitylib.character.RootPart then
-                        entitylib.character.RootPart.Anchored = false
-                    end
                     antiHitActive = false
                 end)
 
@@ -15019,7 +15015,6 @@ run(function()
 
                         -- 生存 / 所有チェック
                         if not alive or not owner then
-                            if root and root.Anchored then root.Anchored = false end
                             antiHitActive = false
                             task.wait(0.1)
                             continue
@@ -15027,7 +15022,6 @@ run(function()
 
                         -- OnlyTargeting スキップ時
                         if not isEnemyNearby() then
-                            if root and root.Anchored then root.Anchored = false end
                             antiHitActive = false
                             task.wait(0.1)
                             continue
@@ -15055,20 +15049,30 @@ run(function()
                                 skyY = root.Position.Y + 3
                             end
                         end
+
                         local skyPos = Vector3.new(root.Position.X, skyY, root.Position.Z)
                         if isBodyClear(skyPos, root) then
                             root.CFrame = CFrame.new(skyPos)
-                            -- ★ 修正：上空に飛ばした瞬間に完全ロック（物理・落下停止）
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            root.Anchored = true
+                            root.AssemblyLinearVelocity = Vector3.new(
+                                root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z
+                            )
                         end
 
-                        -- ② 上空で待機（AirTimeの間固定される）
-                        task.wait(AirTime.Value)
+                        -- ② 上空で待機（Y軸のみ固定＆落下速度ゼロ化）
+                        local startTime = clock()
+                        local airDuration = AirTime.Value
+                        local lockY = skyY -- ロック対象のY高度
 
-                        -- ★ 修正：地面移動の前にアンカーを必ず解除
-                        if root then
-                            root.Anchored = false
+                        while (clock() - startTime) < airDuration and AntiHit.Enabled and entitylib.isAlive do
+                            if root and isnetworkowner(root) then
+                                -- Y位置のズレを打ち消しつつ、落下速度(Y)のみ0にリセット
+                                local currentPos = root.Position
+                                root.CFrame = CFrame.new(currentPos.X, lockY, currentPos.Z) * (root.CFrame - root.CFrame.Position)
+                                root.AssemblyLinearVelocity = Vector3.new(
+                                    root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z
+                                )
+                            end
+                            runService.Heartbeat:Wait()
                         end
 
                         -- ③ 地面に戻る（奈落＆窒息チェック付き）
@@ -15085,7 +15089,9 @@ run(function()
                                 )
                                 if isHeadClear(returnPos, root) then
                                     root.CFrame = CFrame.new(returnPos)
-                                    root.AssemblyLinearVelocity = Vector3.zero
+                                    root.AssemblyLinearVelocity = Vector3.new(
+                                        root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z
+                                    )
                                 end
                             end
                         end
@@ -15094,10 +15100,6 @@ run(function()
                         task.wait(GroundTime.Value)
                     end
 
-                    -- 無効化時にアンカー解除
-                    if entitylib.character and entitylib.character.RootPart then
-                        entitylib.character.RootPart.Anchored = false
-                    end
                     antiHitActive = false
                 end)
             else
@@ -15105,9 +15107,6 @@ run(function()
                 pcall(function()
                     runService:UnbindFromRenderStep(camBindName)
                 end)
-                if entitylib.character and entitylib.character.RootPart then
-                    entitylib.character.RootPart.Anchored = false
-                end
                 antiHitActive = false
             end
         end,
@@ -15150,7 +15149,7 @@ run(function()
         Default = false,
         Tooltip = 'Only activates when an enemy is nearby',
         Function = function(callback)
-            if TargetRange and TargetRange.Object then
+            if TargetRange and TargetRange.Object me
                 TargetRange.Object.Visible = callback
             end
         end
