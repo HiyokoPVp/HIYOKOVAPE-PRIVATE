@@ -27,6 +27,16 @@ local function safeGetProto(func, index)
     end
 end
 
+-- if not work try this and change EquipItem upvalue to 3
+
+local function FixedsafeGetProto(func, index)
+    if not func then return nil end
+    local success, proto = pcall(debug.getconstant, func, index)
+    if success then
+        return proto
+    end
+end
+
 local inventoryDebounce = false
 local function fireInventoryChanged()
     if inventoryDebounce then return end
