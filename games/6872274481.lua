@@ -50,9 +50,7 @@ local starterGui = cloneref(game:GetService('StarterGui'))
 local VirtualInputManager = game:GetService("VirtualInputManager")
 local lightingService = cloneref(game:GetService('Lighting'))
 
-local isnetworkowner = identifyexecutor and table.find({'Delta', 'Volt'}, ({identifyexecutor()})[1]) and isnetworkowner or function()
-	return true
-end
+
 local gameCamera = workspace.CurrentCamera
 local lplr = playersService.LocalPlayer
 local assetfunction = getcustomasset
