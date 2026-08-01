@@ -14657,7 +14657,7 @@ run(function()
         end
     end
 
-    LagBackDetector = vape.Categories.Render:CreateModule({
+    LagBackDetector = vape.Categories.AntiCheat:CreateModule({
         Name = 'LagBackDetector',
         Function = function(callback)
             if callback then
