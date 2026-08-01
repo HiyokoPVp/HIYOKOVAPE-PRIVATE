@@ -14902,6 +14902,22 @@ run(function()
     -- BindToRenderStep用ユニーク名
     local camBindName = 'AntiHitCamFix'
 
+    -- 【追加】Y固定用のインスタンスを保持する変数
+    local activeAttachment
+    local activeVelocity
+
+    -- 【追加】Y固定（落下防止）を解除・クリーンアップする関数
+    local function cleanVelocity()
+        if activeVelocity then
+            activeVelocity:Destroy()
+            activeVelocity = nil
+        end
+        if activeAttachment then
+            activeAttachment:Destroy()
+            activeAttachment = nil
+        end
+    end
+
     -------------------------------------------------------
     -- 近くに敵がいるかチェック
     -------------------------------------------------------
@@ -14960,7 +14976,6 @@ run(function()
                 end
 
                 local root = entitylib.character.RootPart
-
                 groundRay.FilterDescendantsInstances = {lplr.Character, gameCamera}
                 groundRay.CollisionGroup = root.CollisionGroup
                 local ray = workspace:Raycast(
@@ -14969,7 +14984,7 @@ run(function()
                     groundRay
                 )
                 if not ray then
-                    return
+                    return 
                 end
 
                 local groundY = ray.Position.Y + (entitylib.character.HipHeight or 2)
@@ -14977,7 +14992,6 @@ run(function()
 
                 local cf = gameCamera.CFrame
                 local look = cf.LookVector
-
                 local dist = (gameCamera.Focus.Position - cf.Position).Magnitude
                 if not (dist == dist) or dist < 0.1 then
                     dist = 0.5
@@ -15003,24 +15017,22 @@ run(function()
                     pcall(function()
                         runService:UnbindFromRenderStep(camBindName)
                     end)
+                    cleanVelocity() -- 【追加】モジュール無効化時に落下防止を解除
                     antiHitActive = false
                 end)
 
-                -- メインループ
                 task.spawn(function()
                     while AntiHit.Enabled do
                         local root = entitylib.character and entitylib.character.RootPart
                         local alive = entitylib.isAlive
                         local owner = root and isnetworkowner(root)
 
-                        -- 生存 / 所有チェック
                         if not alive or not owner then
                             antiHitActive = false
                             task.wait(0.1)
                             continue
                         end
 
-                        -- OnlyTargeting スキップ時
                         if not isEnemyNearby() then
                             antiHitActive = false
                             task.wait(0.1)
@@ -15028,10 +15040,9 @@ run(function()
                         end
 
                         antiHitActive = true
-
                         local hip = entitylib.character.HipHeight or 2
 
-                        -- ① 高く飛ぶ（天井＆めり込みチェック付き）
+                        -- ① 高く飛ぶ
                         local skyY = Height.Value
                         local upParams = RaycastParams.new()
                         upParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
@@ -15049,32 +15060,37 @@ run(function()
                                 skyY = root.Position.Y + 3
                             end
                         end
-
+                        
                         local skyPos = Vector3.new(root.Position.X, skyY, root.Position.Z)
                         if isBodyClear(skyPos, root) then
                             root.CFrame = CFrame.new(skyPos)
                             root.AssemblyLinearVelocity = Vector3.new(
-                                root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z
+                                root.AssemblyLinearVelocity.X, 0,
+                                root.AssemblyLinearVelocity.Z
                             )
+
+                            -- 【追加】上空にいる間、落下しないようにY軸の速度を0に固定する
+                            cleanVelocity()
+                            activeAttachment = Instance.new("Attachment")
+                            activeAttachment.Parent = root
+                            
+                            activeVelocity = Instance.new("LinearVelocity")
+                            activeVelocity.Attachment0 = activeAttachment
+                            activeVelocity.RelativeTo = Enum.ActuatorRelativeTo.World -- ワールド基準
+                            activeVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Line
+                            activeVelocity.LineDirection = Vector3.new(0, 1, 0) -- Y軸に対してのみ作用
+                            activeVelocity.LineVelocity = 0 -- Y軸の速度を0に
+                            activeVelocity.MaxForce = 9e9 -- 重力に負けない力
+                            activeVelocity.Parent = root
                         end
 
-                        -- ② 上空で待機（Y軸のみ固定＆落下速度ゼロ化）
-                        local startTime = clock()
-                        local airDuration = AirTime.Value
-                        local lockY = skyY
+                        -- ② 上空で待機
+                        task.wait(AirTime.Value)
 
-                        while (clock() - startTime) < airDuration and AntiHit.Enabled and entitylib.isAlive do
-                            if root and isnetworkowner(root) then
-                                local currentPos = root.Position
-                                root.CFrame = CFrame.new(currentPos.X, lockY, currentPos.Z) * (root.CFrame - root.CFrame.Position)
-                                root.AssemblyLinearVelocity = Vector3.new(
-                                    root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z
-                                )
-                            end
-                            runService.Heartbeat:Wait()
-                        end
+                        -- 【追加】地面に戻る前にY固定（落下防止）を解除
+                        cleanVelocity()
 
-                        -- ③ 地面に戻る（奈落＆窒息チェック付き）
+                        -- ③ 地面に戻る
                         if entitylib.isAlive and AntiHit.Enabled then
                             local ray2 = workspace:Raycast(
                                 root.Position + Vector3.new(0, 2, 0),
@@ -15089,23 +15105,24 @@ run(function()
                                 if isHeadClear(returnPos, root) then
                                     root.CFrame = CFrame.new(returnPos)
                                     root.AssemblyLinearVelocity = Vector3.new(
-                                        root.AssemblyLinearVelocity.X, 0, root.AssemblyLinearVelocity.Z
+                                        root.AssemblyLinearVelocity.X, 0,
+                                        root.AssemblyLinearVelocity.Z
                                     )
                                 end
                             end
                         end
 
-                        -- ④ 地面で待機
+                        -- ④ 地面で少し待機 → ①に戻る
                         task.wait(GroundTime.Value)
                     end
 
                     antiHitActive = false
                 end)
             else
-                -- 無効化時
                 pcall(function()
                     runService:UnbindFromRenderStep(camBindName)
                 end)
+                cleanVelocity() -- 【追加】
                 antiHitActive = false
             end
         end,
