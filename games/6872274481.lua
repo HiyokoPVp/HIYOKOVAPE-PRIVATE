@@ -14729,6 +14729,10 @@ run(function()
     local isTeleporting = false
     local teleportEndTime = 0
     local originalPosition = nil
+    
+    -- キャラクターロック用の変数
+    local oldWalkSpeed = 16
+    local oldJumpPower = 50
 
     TPDown = vape.Categories.AntiCheat:CreateModule({
         Name = 'TPDown',
@@ -14738,17 +14742,34 @@ run(function()
                     if entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
                         local airTime = GetAirTime()
                         
-                        -- テレポート中の待機・復帰処理
+                        -- テレポート（ロック）中の処理
                         if isTeleporting then
+                            local root = entitylib.character.RootPart
+                            local humanoid = entitylib.character.Humanoid
+                            
                             if tick() < teleportEndTime then
+                                -- ロック中: 移動スピードを消し、位置がずれないよう固定
+                                root.AssemblyLinearVelocity = Vector3.zero
+                                root.AssemblyAngularVelocity = Vector3.zero
                                 task.wait(0.05)
                                 continue
                             else
+                                -- ロック解除: 元の位置に戻してロックを戻す
                                 if originalPosition then
-                                    local root = entitylib.character.RootPart
                                     root.CFrame = CFrame.lookAlong(originalPosition, root.CFrame.LookVector)
                                     root.AssemblyLinearVelocity = Vector3.zero
                                 end
+                                
+                                -- キャラクターの移動・ジャンプ制限を解除
+                                if humanoid then
+                                    humanoid.WalkSpeed = oldWalkSpeed
+                                    if humanoid.UseJumpPower then
+                                        humanoid.JumpPower = oldJumpPower
+                                    else
+                                        humanoid.JumpHeight = oldJumpPower
+                                    end
+                                end
+                                
                                 isTeleporting = false
                                 originalPosition = nil
                             end
@@ -14760,36 +14781,58 @@ run(function()
                             local char = entitylib.character.Character or lplr.Character
                             local humanoid = entitylib.character.Humanoid
                             
-                            -- 最新のキャラクターを無視対象に指定したRaycastParamsを作成
+                            -- 最新のキャラクターを除外対象に設定
                             local RayParams = RaycastParams.new()
                             RayParams.FilterDescendantsInstances = {char, gameCamera}
                             RayParams.FilterType = Enum.RaycastFilterType.Exclude
                             RayParams.RespectCanCollide = true
                             
-                            -- 下方向にRaycast (-1000 studs)
+                            -- 下方向にRaycast
                             local ray = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), RayParams)
                             
                             if ray then
-                                -- 元の位置を保存
                                 originalPosition = root.Position
                                 
-                                -- 正しい高さ（HipHeight + RootPartの高さの半分）を計算
-                                local hipHeight = humanoid and humanoid.HipHeight or 2
-                                meHeightOffset = hipHeight + (root.Size.Y / 2)
+                                -- 地面にピッタリ着地させるための計算
+                                -- R15 / R6 のHumanoidにおける正確な足元高さ
+                                local hipHeight = 0
+                                if humanoid then
+                                    hipHeight = humanoid.HipHeight
+                                    -- R6の場合はHipHeightが0になることがあるため、その場合はRootPartからの距離で調整
+                                    if hipHeight == 0 then
+                                        hipHeight = 1.5 
+                                    end
+                                end
                                 
-                                -- 地面の真上に配置
+                                -- 宙に浮かないよう微調整値 (-0.15) を引いたピッタリ高度
+                                local exactGroundY = ray.Position.Y + hipHeight + (root.Size.Y / 2) - 0.15
+                                
+                                -- 地面にテレポート
                                 root.CFrame = CFrame.lookAlong(
-                                    Vector3.new(root.Position.X, ray.Position.Y + meHeightOffset, root.Position.Z), 
+                                    Vector3.new(root.Position.X, exactGroundY, root.Position.Z), 
                                     root.CFrame.LookVector
                                 )
                                 root.AssemblyLinearVelocity = Vector3.zero
+                                root.AssemblyAngularVelocity = Vector3.zero
+                                
+                                -- キャラクターをロック（移動・ジャンプを無効化）
+                                if humanoid then
+                                    oldWalkSpeed = humanoid.WalkSpeed
+                                    oldJumpPower = humanoid.UseJumpPower and humanoid.JumpPower or humanoid.JumpHeight
+                                    
+                                    humanoid.WalkSpeed = 0
+                                    if humanoid.UseJumpPower then
+                                        humanoid.JumpPower = 0
+                                    else
+                                        humanoid.JumpHeight = 0
+                                    end
+                                end
                                 
                                 -- 通知
                                 if Notify and Notify.Enabled then
-                                    vape:CreateNotification('TPDown', 'Teleported to ground', 2)
+                                    vape:CreateNotification('TPDown', 'Teleported & Locked', 2)
                                 end
                                 
-                                -- 状態更新
                                 isTeleporting = true
                                 teleportEndTime = tick() + Duration.Value
                             end
@@ -14799,11 +14842,22 @@ run(function()
                 until not TPDown.Enabled
             else
                 -- 無効化時のクリーンアップ
+                if isTeleporting and entitylib.isAlive then
+                    local humanoid = entitylib.character.Humanoid
+                    if humanoid then
+                        humanoid.WalkSpeed = oldWalkSpeed
+                        if humanoid.UseJumpPower then
+                            humanoid.JumpPower = oldJumpPower
+                        else
+                            humanoid.JumpHeight = oldJumpPower
+                        end
+                    end
+                end
                 isTeleporting = false
                 originalPosition = nil
             end
         end,
-        Tooltip = 'Teleports you to the ground if you fall for more than 2 seconds.'
+        Tooltip = 'Teleports and locks you to the ground if you fall for more than 2 seconds.'
     })
 
     Duration = TPDown:CreateSlider({
