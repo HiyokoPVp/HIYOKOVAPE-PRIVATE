@@ -14788,7 +14788,7 @@ run(function()
                         end
                         
                         -- 発動条件: テレポ中ではなく、1回の落下でまだTPしておらず、空中時間が2秒超過
-                        if not isTeleporting and not hasTeleportedThisFall and airTime > 2 then
+                        if not isTeleporting and not hasTeleportedThisFall and airTime > 1 then
                             local char = entitylib.character.Character or lplr.Character
                             
                             -- 最新のキャラクターを除外対象に設定
