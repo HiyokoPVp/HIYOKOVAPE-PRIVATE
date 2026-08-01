@@ -4907,20 +4907,28 @@ run(function()
             end
         end
     
-        v.Enabled = false
         local alreadygot = {}
+        local hasItem = false -- 有効なアイテムが存在するか追跡
+        
         for _, item in chestitems do
-            -- リスト判定を解除し、重複防止（alreadygot）のみで全アイテムを表示
             if not alreadygot[item.Name] then
-                alreadygot[item.Name] = true
-                v.Enabled = true
-                local blockimage = Instance.new('ImageLabel')
-                blockimage.Size = UDim2.fromOffset(32, 32)
-                blockimage.BackgroundTransparency = 1
-                blockimage.Image = bedwars.getIcon({itemType = item.Name}, true)
-                blockimage.Parent = v.Frame
+                local icon = bedwars.getIcon({itemType = item.Name}, true)
+                -- アイコンが存在する有効なアイテムのみ追加
+                if icon and icon ~= '' then
+                    alreadygot[item.Name] = true
+                    hasItem = true
+                    
+                    local blockimage = Instance.new('ImageLabel')
+                    blockimage.Size = UDim2.fromOffset(32, 32)
+                    blockimage.BackgroundTransparency = 1
+                    blockimage.Image = icon
+                    blockimage.Parent = v.Frame
+                end
             end
         end
+        
+        -- アイテムが1つ以上読み込めた場合のみESP枠を表示
+        v.Enabled = hasItem
         table.clear(chestitems)
     end
     
@@ -4936,6 +4944,8 @@ run(function()
         billboard.AlwaysOnTop = true
         billboard.ClipsDescendants = false
         billboard.Adornee = v
+        billboard.Enabled = false -- 初期状態は非表示
+        
         local blur = addBlur(billboard)
         blur.Visible = Background.Enabled
         local frame = Instance.new('Frame')
@@ -4957,7 +4967,6 @@ run(function()
         corner.Parent = frame
         Reference[v] = billboard
 
-        -- アイテム追加時・削除時の条件分岐を外し、常に更新を実行
         StorageESP:Clean(chest.ChildAdded:Connect(function(item)
             refreshAdornee(billboard)
         end))
@@ -4983,7 +4992,6 @@ run(function()
         Tooltip = 'Displays items in chests'
     })
 
-    -- ※全表示にするためTextList設定は内部更新処理のみ残しています
     List = StorageESP:CreateTextList({
         Name = 'Item',
         Function = function()
