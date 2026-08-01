@@ -2640,7 +2640,6 @@ run(function()
 						if not flyAllowed then
 							if tpToggle then
 								local airleft = GetAirTime()
-								print(airleft)
 								if airleft > 2 then
 									if not oldy then
 										local ray = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), rayCheck)
@@ -14724,11 +14723,14 @@ end)
 run(function()
     local TPDown
     local Duration
-    local Notify -- 通知用オプション
+    local Notify
+    
+    -- Raycastパラメータの設定 (RespectCanCollide = true)
     local RayParams = RaycastParams.new()
     RayParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
+    RayParams.RespectCanCollide = true
     
-    -- テレポート状態の管理用変数
+    -- 状態管理用変数
     local isTeleporting = false
     local teleportEndTime = 0
     local originalPosition = nil
@@ -14737,51 +14739,48 @@ run(function()
         Name = 'TPDown',
         Function = function(callback)
             if callback then
-                -- モジュール有効化時のループ
                 repeat
                     if entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
                         local airTime = GetAirTime()
                         
-                        -- 既にテレポート中で、終了時間になっていない場合は待機
+                        -- テレポート中の待機・復帰処理
                         if isTeleporting then
                             if tick() < teleportEndTime then
                                 task.wait(0.05)
                                 continue
                             else
-                                -- 時間経過したので元の位置に戻る
+                                -- 時間経過したら元の位置(Y座標など)に戻る
                                 if originalPosition then
-                                    entitylib.character.RootPart.CFrame = CFrame.lookAlong(originalPosition, entitylib.character.RootPart.CFrame.LookVector)
-                                    entitylib.character.RootPart.AssemblyLinearVelocity = Vector3.zero
+                                    local root = entitylib.character.RootPart
+                                    -- CFrame.lookAlongを使って向きを保ちながら位置を戻す
+                                    root.CFrame = CFrame.lookAlong(originalPosition, root.CFrame.LookVector)
+                                    root.AssemblyLinearVelocity = Vector3.zero
                                 end
                                 isTeleporting = false
                                 originalPosition = nil
                             end
                         end
                         
-                        -- テレポート中でない且つ、空中時間が2秒超過した場合
+                        -- 発動条件: テレポ中ではなく、空中時間が2秒超過
                         if not isTeleporting and airTime > 2 then
                             local root = entitylib.character.RootPart
-                            local startPos = root.Position
                             
-                            -- 下方向にRaycast
-                            local rayResult = workspace:Raycast(startPos, Vector3.new(0, -1000, 0), RayParams)
+                            -- 下方向にRaycast (-1000 studs)
+                            local ray = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), RayParams)
                             
-                            if rayResult then
-                                -- 地面を検出
-                                local hitPos = rayResult.Position
-                                local hitNormal = rayResult.Normal
-                                
-                                -- ヒット位置の少し上にテレポート
-                                local targetPos = hitPos + (hitNormal * (entitylib.character.HipHeight + 2)) 
-                                
+                            if ray then
                                 -- 元の位置を保存
                                 originalPosition = root.CFrame.p
                                 
-                                -- テレポート実行
-                                root.CFrame = CFrame.lookAlong(targetPos, root.CFrame.LookVector)
+                                -- ご指定のテレポート処理
+                                -- HipHeightを加算して地面の上に配置
+                                root.CFrame = CFrame.lookAlong(
+                                    Vector3.new(root.Position.X, ray.Position.Y + entitylib.character.HipHeight, root.Position.Z), 
+                                    root.CFrame.LookVector
+                                )
                                 root.AssemblyLinearVelocity = Vector3.zero
                                 
-                                -- 通知機能
+                                -- 通知
                                 if Notify.Enabled then
                                     vape:CreateNotification('TPDown', 'Teleported to ground', 2)
                                 end
@@ -14795,7 +14794,7 @@ run(function()
                     task.wait(0.05)
                 until not TPDown.Enabled
             else
-                -- モジュール無効化時のクリーンアップ
+                -- 無効化時のクリーンアップ
                 isTeleporting = false
                 originalPosition = nil
             end
