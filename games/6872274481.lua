@@ -14725,11 +14725,6 @@ run(function()
     local Duration
     local Notify
     
-    -- Raycastパラメータの設定 (RespectCanCollide = true)
-    local RayParams = RaycastParams.new()
-    RayParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
-    RayParams.RespectCanCollide = true
-    
     -- 状態管理用変数
     local isTeleporting = false
     local teleportEndTime = 0
@@ -14749,10 +14744,8 @@ run(function()
                                 task.wait(0.05)
                                 continue
                             else
-                                -- 時間経過したら元の位置(Y座標など)に戻る
                                 if originalPosition then
                                     local root = entitylib.character.RootPart
-                                    -- CFrame.lookAlongを使って向きを保ちながら位置を戻す
                                     root.CFrame = CFrame.lookAlong(originalPosition, root.CFrame.LookVector)
                                     root.AssemblyLinearVelocity = Vector3.zero
                                 end
@@ -14764,24 +14757,35 @@ run(function()
                         -- 発動条件: テレポ中ではなく、空中時間が2秒超過
                         if not isTeleporting and airTime > 2 then
                             local root = entitylib.character.RootPart
+                            local char = entitylib.character.Character or lplr.Character
+                            local humanoid = entitylib.character.Humanoid
+                            
+                            -- 最新のキャラクターを無視対象に指定したRaycastParamsを作成
+                            local RayParams = RaycastParams.new()
+                            RayParams.FilterDescendantsInstances = {char, gameCamera}
+                            RayParams.FilterType = Enum.RaycastFilterType.Exclude
+                            RayParams.RespectCanCollide = true
                             
                             -- 下方向にRaycast (-1000 studs)
                             local ray = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), RayParams)
                             
                             if ray then
                                 -- 元の位置を保存
-                                originalPosition = root.CFrame.p
+                                originalPosition = root.Position
                                 
-                                -- ご指定のテレポート処理
-                                -- HipHeightを加算して地面の上に配置
+                                -- 正しい高さ（HipHeight + RootPartの高さの半分）を計算
+                                local hipHeight = humanoid and humanoid.HipHeight or 2
+                                meHeightOffset = hipHeight + (root.Size.Y / 2)
+                                
+                                -- 地面の真上に配置
                                 root.CFrame = CFrame.lookAlong(
-                                    Vector3.new(root.Position.X, ray.Position.Y + entitylib.character.HipHeight, root.Position.Z), 
+                                    Vector3.new(root.Position.X, ray.Position.Y + meHeightOffset, root.Position.Z), 
                                     root.CFrame.LookVector
                                 )
                                 root.AssemblyLinearVelocity = Vector3.zero
                                 
                                 -- 通知
-                                if Notify.Enabled then
+                                if Notify and Notify.Enabled then
                                     vape:CreateNotification('TPDown', 'Teleported to ground', 2)
                                 end
                                 
