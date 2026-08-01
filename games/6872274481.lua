@@ -14992,7 +14992,7 @@ run(function()
     -------------------------------------------------------
     -- モジュール本体
     -------------------------------------------------------
-    AntiHit = vape.Categories.Blatant:CreateModule({
+    AntiHit = vape.Categories.Rage:CreateModule({
         Name = 'AntiHit',
         Function = function(callback)
             if callback then
