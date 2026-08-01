@@ -14723,6 +14723,7 @@ end)
 run(function()
     local TPDown
     local Duration
+    local AirTimeOption
     local Notify
     
     -- 状態管理用変数
@@ -14787,8 +14788,9 @@ run(function()
                             end
                         end
                         
-                        -- 発動条件: テレポ中ではなく、1回の落下でまだTPしておらず、空中時間が2秒超過
-                        if not isTeleporting and not hasTeleportedThisFall and airTime > 1 then
+                        -- 発動条件: テレポ中ではなく、1回の落下で未実行、設定した空中時間を超過
+                        local targetAirTime = AirTimeOption and AirTimeOption.Value or 1.5
+                        if not isTeleporting and not hasTeleportedThisFall and airTime > targetAirTime then
                             local char = entitylib.character.Character or lplr.Character
                             
                             -- 最新のキャラクターを除外対象に設定
@@ -14856,6 +14858,15 @@ run(function()
             end
         end,
         Tooltip = 'Teleports and locks you to the ground once per fall.'
+    })
+
+    AirTimeOption = TPDown:CreateSlider({
+        Name = 'Air Time Trigger',
+        Min = 0.1,
+        Max = 2.4,
+        Default = 1.5,
+        Decimal = 10,
+        Suffix = 'seconds'
     })
 
     Duration = TPDown:CreateSlider({
