@@ -2637,7 +2637,7 @@ run(function()
 
 						if not flyAllowed then
 							if tpToggle then
-								local airleft = 1.9
+								local airleft = entitylib.character.AirTime
 								print(airleft)
 								if airleft > 2 then
 									if not oldy then
