@@ -14640,34 +14640,72 @@ run(function()
     local AutoTPDOWN
     local rayCheck = RaycastParams.new()
     rayCheck.RespectCanCollide = true
+    
+    -- 状態管理用変数
+    local isTeleported = false
+    local oldY = nil
+    local tpTime = 0
 
     AutoTPDOWN = vape.Categories.Blatant:CreateModule({
         Name = 'AutoTPDOWN',
         Function = function(callback)
             if callback then
                 AutoTPDOWN:Clean(runService.PreSimulation:Connect(function(dt)
-                    if entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
-                        local airleft = GetAirTime()
+                    if not entitylib.isAlive or not isnetworkowner(entitylib.character.RootPart) then
+                        -- リセット
+                        isTeleported = false
+                        oldY = nil
+                        return
+                    end
+
+                    local root = entitylib.character.RootPart
+                    local airleft = GetAirTime()
+                    
+                    -- テレポート後の復帰処理
+                    if isTeleported and oldY then
+                        -- 0.5秒経過したら元の高さに戻す
+                        if tick() - tpTime > 0.5 then
+                            root.CFrame = CFrame.lookAlong(
+                                Vector3.new(root.Position.X, oldY, root.Position.Z), 
+                                root.CFrame.LookVector
+                            )
+                            isTeleported = false
+                            oldY = nil
+                        end
+                        return
+                    end
+
+                    -- 空中に2.4秒以上いた場合の処理
+                    if airleft > 2.4 then
+                        -- Flyなどが有効なら何もしない
+                        if vape.Modules.Fly.Enabled or vape.Modules.InfiniteFly.Enabled then return end
                         
-                        -- 空中に2.4秒以上いた場合
-                        if airleft > 2.4 then
-                            local root = entitylib.character.RootPart
-                            rayCheck.FilterDescendantsInstances = {lplr.Character, gameCamera, AntiFallPart}
-                            rayCheck.CollisionGroup = root.CollisionGroup
+                        rayCheck.FilterDescendantsInstances = {lplr.Character, gameCamera, AntiFallPart}
+                        rayCheck.CollisionGroup = root.CollisionGroup
+                        
+                        -- 真下に向かってレイキャスト
+                        local ray = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), rayCheck)
+                        if ray then
+                            -- 現在の高さを保存
+                            oldY = root.Position.Y
                             
-                            -- 真下に向かってレイキャスト（FlyのTP Downと同じ処理）
-                            local ray = workspace:Raycast(root.Position, Vector3.new(0, -1000, 0), rayCheck)
-                            if ray then
-                                root.CFrame = CFrame.lookAlong(
-                                    Vector3.new(root.Position.X, ray.Position.Y + entitylib.character.HipHeight, root.Position.Z), 
-                                    root.CFrame.LookVector
-                                )
-                            end
+                            -- 地面にテレポート
+                            root.CFrame = CFrame.lookAlong(
+                                Vector3.new(root.Position.X, ray.Position.Y + entitylib.character.HipHeight, root.Position.Z), 
+                                root.CFrame.LookVector
+                            )
+                            
+                            isTeleported = true
+                            tpTime = tick()
                         end
                     end
                 end))
+            else
+                -- モジュールOFF時にリセット
+                isTeleported = false
+                oldY = nil
             end
         end,
-        Tooltip = 'Automatically teleports you down to the ground if you are in the air for more than 2.4 seconds.'
+        Tooltip = 'Automatically teleports you down to the ground if you are in the air for more than 2.4 seconds, then returns you to your original height.'
     })
 end)
