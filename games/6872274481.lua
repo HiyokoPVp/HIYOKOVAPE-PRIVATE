@@ -15135,8 +15135,8 @@ run(function()
     Height = AntiHit:CreateSlider({
         Name = 'Height',
         Min = 50,
-        Max = 500,
-        Default = 80,
+        Max = 200,
+        Default = 150,
         Suffix = function(val)
             return val == 1 and 'stud' or 'studs'
         end
@@ -15145,7 +15145,7 @@ run(function()
     AirTime = AntiHit:CreateSlider({
         Name = 'Air Time',
         Min = 0.1,
-        Max = 3,
+        Max = 2,
         Default = 0.7,
         Decimal = 10,
         Suffix = 'seconds'
@@ -15154,8 +15154,8 @@ run(function()
     GroundTime = AntiHit:CreateSlider({
         Name = 'Ground Time',
         Min = 0,
-        Max = 1,
-        Default = 0.1,
+        Max = 0.5,
+        Default = 0.15,
         Decimal = 100,
         Suffix = 'seconds'
     })
