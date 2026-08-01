@@ -950,7 +950,72 @@ run(function()
 	getgenv().store = store
 	getgenv().bedwars = bedwars
 
+		local function createMethodHook(object, method)
+		local original = object[method]
+		local hooks, order = {}, 0
+		local wrapper
+		
+		local function sync()
+			if #hooks > 0 then
+				object[method] = wrapper
+			elseif object[method] == wrapper then
+				object[method] = original
+			end
+		end
+		
+		wrapper = function(...)
+			local index = 0
+			local function nextHook(...)
+				index += 1
+				local hook = hooks[index]
+				if hook then
+					return hook.Callback(nextHook, ...)
+				end
+				return original(...)
+			end
+			return nextHook(...)
+		end
+		
+		return {
+			Add = function(_, id, priority, callback)
+				for i = #hooks, 1, -1 do
+					if hooks[i].Id == id then
+						table.remove(hooks, i)
+					end
+				end
+				
+				order += 1
+				local entry = {
+					Id = id,
+					Priority = priority or 100,
+					Order = order,
+					Callback = callback
+				}
+				
+				table.insert(hooks, entry)
+				table.sort(hooks, function(a, b)
+					return a.Priority == b.Priority and a.Order < b.Order or a.Priority < b.Priority
+				end)
+				sync()
+				
+				return function()
+					for i = #hooks, 1, -1 do
+						if hooks[i] == entry then
+							table.remove(hooks, i)
+						end
+					end
+					sync()
+				end
+			end,
+			Destroy = function()
+				table.clear(hooks)
+				sync()
+			end
+		}
+	end
+	
 	bedwars.ProjectileLaunchHook = createMethodHook(bedwars.ProjectileController, 'calculateImportantLaunchValues')
+
 
 	OldBreak = bedwars.BlockController.isBlockBreakable
 	Client.Get = function(self, remoteName)
