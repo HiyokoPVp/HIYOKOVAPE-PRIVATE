@@ -950,6 +950,8 @@ run(function()
 	getgenv().store = store
 	getgenv().bedwars = bedwars
 
+	bedwars.ProjectileLaunchHook = createMethodHook(bedwars.ProjectileController, 'calculateImportantLaunchValues')
+
 	OldBreak = bedwars.BlockController.isBlockBreakable
 	Client.Get = function(self, remoteName)
 		local call = OldGet(self, remoteName)
