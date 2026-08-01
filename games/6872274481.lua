@@ -14873,7 +14873,7 @@ run(function()
         Name = 'Ground Duration',
         Min = 0.01,
         Max = 0.5,
-        Default = 0.1,
+        Default = 0.15,
         Decimal = 100,
         Suffix = 'seconds'
     })
