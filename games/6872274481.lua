@@ -14518,3 +14518,120 @@ run(function()
 	})
 end)
 
+run(function()
+    local DamageBoost
+    local BoostSpeed
+    local Duration
+    local OnlyFighting -- 追加: トグル用変数
+    
+    -- 状態管理用変数
+    local isBoosting = false
+    local boostEndTime = 0
+
+    DamageBoost = vape.Categories.Blatant:CreateModule({
+        Name = 'DamageBoost',
+        Function = function(callback)
+            if callback then
+                -- ダメージイベントの監視開始
+                DamageBoost:Clean(vapeEvents.EntityDamageEvent.Event:Connect(function(damageTable)
+                    -- 自分自身がダメージを受けた場合のみ処理
+                    if damageTable.entityInstance == lplr.Character then
+                        
+                        -- 【追加】Only Fightingが有効な場合、周囲50スタッド内に敵がいるかチェック
+                        if OnlyFighting.Enabled then
+                            -- entitylibの敵取得処理（50スタッド以内の最も近い敵）
+                            local target = entitylib.getClosestEntity({
+                                Distance = 50,
+                                Players = true,
+                                NPC = false, -- 必要に応じてNPC判定もtrueに変更可能
+                                TargetCheck = function(ent)
+                                    return ent.Targetable and ent.Alive and ent.Player ~= lplr
+                                end
+                            })
+                            
+                            -- 範囲内に敵がいない場合はブーストを発動せずに処理を抜ける
+                            if not target then
+                                return
+                            end
+                        end
+
+                        -- 現在の時間を記録し、ブースト終了時間を設定
+                        boostEndTime = tick() + Duration.Value
+                        isBoosting = true
+                        
+                        -- 物理演算の更新ループで速度を上書きするためのフラグを立てる
+                        frictionTable.DamageBoost = true
+                        updateVelocity()
+                    end
+                end))
+                
+                -- PreSimulationループで速度を強制適用
+                DamageBoost:Clean(runService.PreSimulation:Connect(function(dt)
+                    if isBoosting and entitylib.isAlive and isnetworkowner(entitylib.character.RootPart) then
+                        local currentTime = tick()
+                        
+                        -- 設定された時間が経過したらブースト解除
+                        if currentTime >= boostEndTime then
+                            isBoosting = false
+                            frictionTable.DamageBoost = nil
+                            updateVelocity()
+                            return
+                        end
+                        
+                        -- ブースト中の速度適用ロジック (Speedモジュールを参考)
+                        local root = entitylib.character.RootPart
+                        local moveDirection = entitylib.character.Humanoid.MoveDirection
+                        
+                        -- 移動方向がない場合は何もしない（空中での制御防止など）
+                        if moveDirection.Magnitude > 0 then
+                            -- 目標速度(BoostSpeed)と現在速度の差を埋めるようにCFrameを操作
+                            local currentSpeed = getSpeed() -- 現在の基本速度を取得
+                            local targetSpeed = BoostSpeed.Value
+                            
+                            -- 加速が必要な場合のみ適用
+                            if targetSpeed > currentSpeed then
+                                local destination = (moveDirection * (targetSpeed - currentSpeed) * dt)
+                                root.CFrame += destination
+                                
+                                -- 速度ベクトルも強制的に上書きして即座に反映させる
+                                root.AssemblyLinearVelocity = (moveDirection * targetSpeed) + Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+                            end
+                        end
+                    end
+                end))
+            else
+                -- モジュールOFF時のクリーンアップ
+                isBoosting = false
+                frictionTable.DamageBoost = nil
+                updateVelocity()
+            end
+        end,
+        Tooltip = 'Applies a burst of speed when taking damage.'
+    })
+
+    BoostSpeed = DamageBoost:CreateSlider({
+        Name = 'Boost Speed',
+        Min = 1,
+        Max = 50,
+        Default = 30,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+
+    Duration = DamageBoost:CreateSlider({
+        Name = 'Duration',
+        Min = 0.1,
+        Max = 2.0,
+        Default = 0.5,
+        Decimal = 10,
+        Suffix = 'seconds'
+    })
+
+    -- 追加: Only Fighting トグルの作成
+    OnlyFighting = DamageBoost:CreateToggle({
+        Name = 'Only Fighting',
+        Default = false,
+        Tooltip = 'Only activates boost if an enemy is within 50 studs.'
+    })
+end)
