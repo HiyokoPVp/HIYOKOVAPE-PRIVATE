@@ -3152,8 +3152,8 @@ run(function()
 	UpdateRate = Killaura:CreateSlider({
 		Name = 'Update rate',
 		Min = 1,
-		Max = 15,
-		Default = 10,
+		Max = 10,
+		Default = 7,
 		Suffix = 'hz'
 	})
 	MaxTargets = Killaura:CreateSlider({
