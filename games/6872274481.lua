@@ -15563,3 +15563,24 @@ run(function()
 		Default = true
 	})
 end)
+
+run(function()
+	local TeamNotify = vape.Categories.Debug:CreateModule({
+		Name = 'TeamID Notify',
+		Function = function(callback)
+			if callback then
+				-- ローカルプレイヤーのTeamアトリビュートからチームIDを取得
+				-- ※Bedwarsは標準のplayer.TeamではなくAttributeでチームを管理しています
+				local teamId = lplr:GetAttribute("Team")
+				
+				if teamId then
+					-- Vape標準の通知関数を使用して表示
+					notif('TeamID Notify', 'Your Team ID: ' .. tostring(teamId), 5)
+				else
+					notif('TeamID Notify', 'Team ID not found (Lobby or Error)', 5, 'alert')
+				end
+			end
+		end,
+		Tooltip = 'Notifies your current Bedwars Team ID when toggled.'
+	})
+end)
