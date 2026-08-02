@@ -2618,8 +2618,6 @@ run(function()
     local MobileButtons
     local FlyAnywayProgressBar = {Enabled = false}
     local FlyAnywayProgressBarFrame
-    local progressBarHeight = 20
-    local progressBarWidthScale = 0.2
     local rayCheck = RaycastParams.new()
     rayCheck.RespectCanCollide = true
     local up, down, old = 0, 0
@@ -2628,7 +2626,7 @@ run(function()
     local onground = false
     local flyCooldownActive = false
     local lastGroundTouchTime = 0
-    local MAX_FLY_TIME = 2.5
+    local MAX_FLY_TIME = 2
     local tick = tick
     local task_wait = task.wait
     local math_max = math.max
@@ -2645,6 +2643,14 @@ run(function()
     local lastMatchStateCheck = 0
     local lastGroundTime = tick()
     local airTime = 0
+
+    local progressBarHeight = 30
+    local progressBarWidthScale = 0.25
+    local progressBarYOffset = -200
+    local progressBarColor = Color3.fromHSV(vape.GUIColor.Hue, vape.GUIColor.Sat, vape.GUIColor.Value)
+    local progressBarR = math_floor(progressBarColor.R * 255)
+    local progressBarG = math_floor(progressBarColor.G * 255)
+    local progressBarB = math_floor(progressBarColor.B * 255)
     
     local function createMobileButton(name, position, icon)
         local button = Instance.new("TextButton")
@@ -2957,6 +2963,21 @@ run(function()
         Default = true
     })
 
+    local function applyProgressBarColor()
+        if not FlyAnywayProgressBarFrame then return end
+
+        local bar = FlyAnywayProgressBarFrame:FindFirstChild("Frame")
+        if bar then
+            bar.BackgroundColor3 = progressBarColor
+        end
+    end
+
+    local function applyProgressBarPosition()
+        if not FlyAnywayProgressBarFrame then return end
+
+        FlyAnywayProgressBarFrame.Position = udim2new(0.5, 0, 1, progressBarYOffset)
+    end
+
     local function applyProgressBarSize()
         if not FlyAnywayProgressBarFrame then return end
 
@@ -2965,6 +2986,7 @@ run(function()
         local bar = FlyAnywayProgressBarFrame:FindFirstChild("Frame")
         if bar then
             bar.Size = udim2new(bar.Size.X.Scale, 0, 0, progressBarHeight)
+            bar.BackgroundColor3 = progressBarColor
         end
 
         local label = FlyAnywayProgressBarFrame:FindFirstChild("TextLabel")
@@ -2973,11 +2995,17 @@ run(function()
         end
     end
 
+    local function applyProgressBarAppearance()
+        applyProgressBarSize()
+        applyProgressBarPosition()
+        applyProgressBarColor()
+    end
+
     local ProgressBarWidth = Fly:CreateSlider({
         Name = 'Progress Bar Width',
         Min = 5,
         Max = 80,
-        Default = 20,
+        Default = 25,
         Suffix = function(val)
             return '%'
         end,
@@ -2992,14 +3020,68 @@ run(function()
         Name = 'Progress Bar Height',
         Min = 10,
         Max = 80,
-        Default = 20,
+        Default = 30,
         Suffix = function(val)
             return 'px'
         end,
         Function = function(val)
             if not val then return end
-            progressBarHeight = val
+            progressBarHeight = math_floor(val)
             applyProgressBarSize()
+        end
+    })
+
+    local ProgressBarYOffsetSlider = Fly:CreateSlider({
+        Name = 'Progress Bar Y Offset',
+        Min = -1000,
+        Max = 0,
+        Default = -200,
+        Suffix = function(val)
+            return 'px'
+        end,
+        Function = function(val)
+            if not val then return end
+            progressBarYOffset = math_floor(val)
+            applyProgressBarPosition()
+        end
+    })
+
+    local ProgressBarRed = Fly:CreateSlider({
+        Name = 'Progress Bar Red',
+        Min = 0,
+        Max = 255,
+        Default = progressBarR,
+        Function = function(val)
+            if not val then return end
+            progressBarR = math_floor(val)
+            progressBarColor = Color3.fromRGB(progressBarR, progressBarG, progressBarB)
+            applyProgressBarColor()
+        end
+    })
+
+    local ProgressBarGreen = Fly:CreateSlider({
+        Name = 'Progress Bar Green',
+        Min = 0,
+        Max = 255,
+        Default = progressBarG,
+        Function = function(val)
+            if not val then return end
+            progressBarG = math_floor(val)
+            progressBarColor = Color3.fromRGB(progressBarR, progressBarG, progressBarB)
+            applyProgressBarColor()
+        end
+    })
+
+    local ProgressBarBlue = Fly:CreateSlider({
+        Name = 'Progress Bar Blue',
+        Min = 0,
+        Max = 255,
+        Default = progressBarB,
+        Function = function(val)
+            if not val then return end
+            progressBarB = math_floor(val)
+            progressBarColor = Color3.fromRGB(progressBarR, progressBarG, progressBarB)
+            applyProgressBarColor()
         end
     })
 
@@ -3007,12 +3089,17 @@ run(function()
         Name = "Progress Bar",
         Function = function(callback)
             if callback then
-                progressBarWidthScale = (ProgressBarWidth and ProgressBarWidth.Value or 20) / 100
-                progressBarHeight = ProgressBarHeight and ProgressBarHeight.Value or 20
+                progressBarWidthScale = ((ProgressBarWidth and ProgressBarWidth.Value) or 25) / 100
+                progressBarHeight = (ProgressBarHeight and ProgressBarHeight.Value) or 30
+                progressBarYOffset = (ProgressBarYOffsetSlider and ProgressBarYOffsetSlider.Value) or -200
+                progressBarR = (ProgressBarRed and ProgressBarRed.Value) or progressBarR
+                progressBarG = (ProgressBarGreen and ProgressBarGreen.Value) or progressBarG
+                progressBarB = (ProgressBarBlue and ProgressBarBlue.Value) or progressBarB
+                progressBarColor = Color3.fromRGB(progressBarR, progressBarG, progressBarB)
 
                 FlyAnywayProgressBarFrame = Instance.new("Frame")
                 FlyAnywayProgressBarFrame.AnchorPoint = Vector2.new(0.5, 0)
-                FlyAnywayProgressBarFrame.Position = udim2new(0.5, 0, 1, -200)
+                FlyAnywayProgressBarFrame.Position = udim2new(0.5, 0, 1, progressBarYOffset)
                 FlyAnywayProgressBarFrame.Size = udim2new(progressBarWidthScale, 0, 0, progressBarHeight)
                 FlyAnywayProgressBarFrame.BackgroundTransparency = 0.5
                 FlyAnywayProgressBarFrame.BorderSizePixel = 0
@@ -3027,13 +3114,13 @@ run(function()
                 FlyAnywayProgressBarFrame2.Size = udim2new(1, 0, 0, progressBarHeight)
                 FlyAnywayProgressBarFrame2.BackgroundTransparency = 0
                 FlyAnywayProgressBarFrame2.BorderSizePixel = 0
-                FlyAnywayProgressBarFrame2.BackgroundColor3 = Color3.fromHSV(vape.GUIColor.Hue, vape.GUIColor.Sat, vape.GUIColor.Value)
+                FlyAnywayProgressBarFrame2.BackgroundColor3 = progressBarColor
                 FlyAnywayProgressBarFrame2.Visible = true
                 FlyAnywayProgressBarFrame2.Parent = FlyAnywayProgressBarFrame
                 
                 local FlyAnywayProgressBartext = Instance.new("TextLabel")
                 FlyAnywayProgressBartext.Name = "TextLabel"
-                FlyAnywayProgressBartext.Text = "2.5s"
+                FlyAnywayProgressBartext.Text = "2.0s"
                 FlyAnywayProgressBartext.Font = Enum.Font.Gotham
                 FlyAnywayProgressBartext.TextStrokeTransparency = 0
                 FlyAnywayProgressBartext.TextColor3 = Color3.new(0.9, 0.9, 0.9)
@@ -3043,7 +3130,7 @@ run(function()
                 FlyAnywayProgressBartext.Position = udim2new(0, 0, 0, 0)
                 FlyAnywayProgressBartext.Parent = FlyAnywayProgressBarFrame
 
-                applyProgressBarSize()
+                applyProgressBarAppearance()
             else
                 if FlyAnywayProgressBarFrame then 
                     FlyAnywayProgressBarFrame:Destroy() 
