@@ -3284,8 +3284,9 @@ run(function()
 	local AirhitChance
 	local AttackableCheck
 	local LegitAura = {}
+	local InMatchCheck
 	
-	-- 追加: Ignore Player関連の変数
+	-- Ignore Player関連の変数
 	local IgnorePlayer
 	local IgnoredList
 	local IgnoreRange
@@ -3380,6 +3381,26 @@ run(function()
 				end
 				local swingCooldown = 0
 				repeat
+					if InMatchCheck.Enabled then
+						while InMatchCheck.Enabled and Killaura.Enabled and store.matchState ~= 1 do
+							Attacking = false
+							store.KillauraTarget = nil
+
+							for _, v in Boxes do
+								v.Adornee = nil
+							end
+							for _, v in Particles do
+								v.Parent = nil
+							end
+
+							task.wait(0.2)
+						end
+
+						if not Killaura.Enabled then
+							break
+						end
+					end
+
 					local attacked, sword, meta = {}, getAttackData()
 					Attacking = false
 					store.KillauraTarget = nil
@@ -3418,12 +3439,17 @@ run(function()
 									end
 								end
 								
-								-- 変更点: IgnorePlayerの処理
 								local currentAttackRange = AttackRange.Value
 								if IgnorePlayer and IgnorePlayer.Enabled and v.Player then
 									local playerName = v.Player.Name
-									if table.find(IgnoredList.ListEnabled, playerName) then
+									local ignoredNames = IgnoredList and (IgnoredList.ListEnabled or IgnoredList.List) or {}
+
+									if table.find(ignoredNames, playerName) then
 										currentAttackRange = IgnoreRange.Value
+
+										if currentAttackRange <= 0 then
+											continue
+										end
 									end
 								end
 
@@ -3447,21 +3473,27 @@ run(function()
 									end
 								end
 								
-								-- 変更点: currentAttackRangeを使用
 								if delta.Magnitude > currentAttackRange then continue end
-								if delta.Magnitude < 14.4 and (tick() - swingCooldown) < math.max(ChargeTime.Value, 0.02) then continue end
+
+								local effectiveCloseRange = math.min(currentAttackRange, 14.4)
+								if delta.Magnitude < effectiveCloseRange and (tick() - swingCooldown) < math.max(ChargeTime.Value, 0.02) then continue end
 								
 								local actualRoot = v.Character.PrimaryPart
 								if actualRoot then
 									local dir = CFrame.lookAt(selfpos, actualRoot.Position).LookVector
-									local pos = selfpos + dir * math.max(delta.Magnitude - 14.399, 0)
+									local fakeReach = math.min(14.399, currentAttackRange)
+									local pos = selfpos + dir * math.max(delta.Magnitude - fakeReach, 0)
+									local safeAttackReach = math.min(delta.Magnitude, currentAttackRange, 14.4)
+
 									swingCooldown = tick()
 									bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
-									store.attackReach = (delta.Magnitude * 100) // 1 / 100
+									store.attackReach = (safeAttackReach * 100) // 1 / 100
 									store.attackReachUpdate = tick() + 1
-									if delta.Magnitude < 14.4 and ChargeTime.Value > 0.11 then
+
+									if delta.Magnitude < effectiveCloseRange and ChargeTime.Value > 0.11 then
 										AnimDelay = tick()
 									end
+
 									AttackRemote:FireServer({
 										weapon = sword.tool,
 										chargedAttack = {chargeRatio = 0},
@@ -3783,8 +3815,13 @@ run(function()
 		Name = 'Swing only',
 		Tooltip = 'Only attacks while swinging manually'
 	})
+
+	InMatchCheck = Killaura:CreateToggle({
+		Name = 'In Match Check',
+		Tooltip = 'Only runs Killaura while in a match\nWaits until match starts',
+		Default = false
+	})
 	
-	-- 追加: Ignore Player UI要素
 	IgnorePlayer = Killaura:CreateToggle({
 		Name = 'Ignore Player',
 		Tooltip = 'Enables ignoring specific players or changing their attack range',
@@ -16028,55 +16065,4 @@ run(function()
 		end,
 		Tooltip = 'Notifies your team generator position from workspace CFrameValue.'
 	})
-end)
-
-run(function()
-    local NotifyMatchState
-    local lastState = store.matchState
-    local storeConnection
-
-    NotifyMatchState = vape.Categories.Debug:CreateModule({
-        Name = 'NotifyMatchState',
-        Function = function(callback)
-            if callback then
-                lastState = store.matchState
-
-                -- ★ 小文字の connect（Redux store のメソッド）
-                storeConnection = bedwars.Store.changed:connect(function(new, old)
-                    if not NotifyMatchState.Enabled then return end
-
-                    -- 元の updateStore と同じ判定方法
-                    if new.Game ~= old.Game then
-                        local newState = new.Game.matchState
-                        if newState ~= lastState then
-                            lastState = newState
-
-                            local stateText = 'Unknown'
-                            if newState == 0 then
-                                stateText = 'Lobby/Waiting'
-                            elseif newState == 1 then
-                                stateText = 'In Match'
-                            elseif newState == 2 then
-                                stateText = 'Match Ended'
-                            end
-
-                            -- ★ vape:CreateNotification を直接呼ぶ
-                            vape:CreateNotification(
-                                'MatchState',
-                                string.format('State: %d (%s)', newState, stateText),
-                                5
-                            )
-                        end
-                    end
-                end)
-            else
-                -- ★ 小文字の disconnect
-                if storeConnection then
-                    storeConnection:disconnect()
-                    storeConnection = nil
-                end
-            end
-        end,
-        Tooltip = 'Notifies when matchState changes (0=Lobby, 1=Playing, 2=Ended)'
-    })
 end)
