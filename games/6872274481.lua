@@ -16262,3 +16262,152 @@ run(function()
         Tooltip = 'Minimum time between drinks'
     })
 end)
+
+run(function()
+    local TweenService = game:GetService("TweenService")
+    local HiyokoAutowin
+    local LoopThread
+    local currentTween = nil
+
+    -- モジュールの有効化/無効化を行うヘルパー関数
+    local function setModuleState(name, state)
+        local mod = vape.Modules[name]
+        if mod and mod.Enabled ~= state then
+            mod:Toggle()
+        end
+    end
+
+    -- 23 studs/s を超えないようにTween移動を行う関数
+    local function tweenTo(targetCFrame)
+        if not entitylib.isAlive then return end
+        local root = entitylib.character.RootPart
+        local currentPos = root.Position
+        local targetPos = targetCFrame.Position
+        local distance = (targetPos - currentPos).Magnitude
+
+        if distance < 2 then return end
+
+        local speed = 23
+        local timeToMove = distance / speed
+
+        if currentTween then
+            currentTween:Cancel()
+        end
+
+        local tweenInfo = TweenInfo.new(timeToMove, Enum.EasingStyle.Linear)
+        currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
+        currentTween:Play()
+
+        local completed = false
+        local conn
+        conn = currentTween.Completed:Connect(function()
+            completed = true
+            if conn then conn:Disconnect() end
+        end)
+
+        while not completed and HiyokoAutowin.Enabled and entitylib.isAlive do
+            task.wait(0.05)
+        end
+    end
+
+    HiyokoAutowin = vape.Categories.Blatant:CreateModule({
+        Name = 'HiyokoAutowin',
+        Function = function(callback)
+            if callback then
+                -- 連動モジュールの自動ON
+                setModuleState("Killaura", true)
+                setModuleState("Nuker", true)
+                setModuleState("Scaffold", true)
+                setModuleState("AutoQueue", true)
+                setModuleState("AntiAFK", true)
+
+                LoopThread = task.spawn(function()
+                    while HiyokoAutowin.Enabled do
+                        task.wait(0.1)
+                        if not entitylib.isAlive then continue end
+
+                        local woolName, woolCount = getWool()
+                        local ironItem = getItem("iron")
+                        local ironCount = ironItem and ironItem.amount or 0
+
+                        -- 1. 鉄の回収 (自陣ジェネレーターへTween移動)
+                        if (woolCount or 0) < 16 and ironCount < 16 then
+                            local genCFrame = LocalGenCFrame()
+                            if genCFrame then
+                                tweenTo(genCFrame + Vector3.new(0, 3, 0))
+                            end
+
+                        -- 2. ブロック自動購入
+                        elseif ironCount >= 16 then
+                            pcall(function()
+                                bedwars.Client:Get(remotes.BedwarsPurchaseItem or "BedwarsPurchaseItem"):CallServerAsync({
+                                    shopItem = {
+                                        itemType = "wool_white",
+                                        price = 16,
+                                        currency = "iron",
+                                        amount = 1
+                                    }
+                                })
+                            end)
+                            task.wait(0.2)
+
+                        -- 3. ベッド・敵へのTween移動
+                        else
+                            local myTeam = lplr:GetAttribute("Team")
+                            local targetBed = nil
+
+                            for _, v in pairs(workspace:GetDescendants()) do
+                                if v.Name == "bed" and v:IsA("BasePart") then
+                                    local bedTeam = v:GetAttribute("TeamId") or v:GetAttribute("Team")
+                                    if bedTeam and bedTeam ~= myTeam then
+                                        targetBed = v
+                                        break
+                                    end
+                                end
+                            end
+
+                            if targetBed then
+                                tweenTo(targetBed.CFrame + Vector3.new(0, 3, 0))
+                            else
+                                local closestEnemy = nil
+                                local minDist = math.huge
+                                local rootPos = entitylib.character.RootPart.Position
+
+                                for _, ent in pairs(entitylib.List) do
+                                    if ent.Targetable and ent.Health > 0 and ent.RootPart then
+                                        local dist = (ent.RootPart.Position - rootPos).Magnitude
+                                        if dist < minDist then
+                                            minDist = dist
+                                            closestEnemy = ent
+                                        end
+                                    end
+                                end
+
+                                if closestEnemy then
+                                    tweenTo(closestEnemy.RootPart.CFrame + Vector3.new(0, 0, 2))
+                                end
+                            end
+                        end
+                    end
+                end)
+            else
+                if LoopThread then
+                    task.cancel(LoopThread)
+                    LoopThread = nil
+                end
+                if currentTween then
+                    currentTween:Cancel()
+                    currentTween = nil
+                end
+
+                -- 連動モジュールの自動OFF
+                setModuleState("Killaura", false)
+                setModuleState("Nuker", false)
+                setModuleState("Scaffold", false)
+                setModuleState("AutoQueue", false)
+                setModuleState("AntiAFK", false)
+            end
+        end,
+        Tooltip = 'AutoQueueやAntiAFKを含む完全放置対応のHiyokoAutowinモジュール'
+    })
+end)
