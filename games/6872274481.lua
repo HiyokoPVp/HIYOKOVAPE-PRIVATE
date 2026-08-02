@@ -67,32 +67,31 @@ local whitelist = { get = function() return nil, true end, tag = function() retu
 local prediction = vape.Libraries.prediction
 local getfontsize = vape.Libraries.getfontsize
 local getcustomasset = vape.Libraries.getcustomasset
+local airStart
 
-local airStart = nil
-
-local function GetAirTime()
+runService.Heartbeat:Connect(function()
 	local character = entitylib.character
 	if not character or not character.Humanoid then
-		return 0
+		airStart = nil
+		return
 	end
 
 	local humanoid = character.Humanoid
-	local state = humanoid:GetState()
-
-	local airborne =
-		state == Enum.HumanoidStateType.Freefall
-		or state == Enum.HumanoidStateType.Jumping
+	local airborne = humanoid.FloorMaterial == Enum.Material.Air
 
 	if airborne then
-		if not airStart then
-			airStart = tick()
-		end
-		
-		return tick() - airStart
+		airStart = airStart or time()
 	else
 		airStart = nil
+	end
+end)
+
+local function GetAirTime()
+	if not airStart then
 		return 0
 	end
+
+	return time() - airStart
 end
 
 local store = {
