@@ -2618,6 +2618,8 @@ run(function()
     local MobileButtons
     local FlyAnywayProgressBar = {Enabled = false}
     local FlyAnywayProgressBarFrame
+    local progressBarHeight = 20
+    local progressBarWidthScale = 0.2
     local rayCheck = RaycastParams.new()
     rayCheck.RespectCanCollide = true
     local up, down, old = 0, 0
@@ -2643,19 +2645,6 @@ run(function()
     local lastMatchStateCheck = 0
     local lastGroundTime = tick()
     local airTime = 0
-    
-    -- ProgressBar位置設定用変数
-    local PB_PosX = 50
-    local PB_PosY = -200
-    local PB_AnchorX = 0.5
-    local PB_AnchorY = 0
-    
-    local function updateProgressBarPosition()
-        if FlyAnywayProgressBarFrame then
-            FlyAnywayProgressBarFrame.AnchorPoint = Vector2.new(PB_AnchorX, PB_AnchorY)
-            FlyAnywayProgressBarFrame.Position = udim2new(PB_PosX / 100, 0, 0, PB_PosY)
-        end
-    end
     
     local function createMobileButton(name, position, icon)
         local button = Instance.new("TextButton")
@@ -2703,7 +2692,7 @@ run(function()
         local flyAllowed = cachedBalloonCount > 0 or cachedMatchState == 2
         
         if flyAllowed then
-            FlyAnywayProgressBarFrame.Frame.Size = udim2new(1, 0, 0, 20)
+            FlyAnywayProgressBarFrame.Frame.Size = udim2new(1, 0, 0, progressBarHeight)
             FlyAnywayProgressBarFrame.TextLabel.Text = "∞"
             FlyAnywayProgressBarFrame.Visible = FlyAnywayProgressBar.Enabled
             return
@@ -2722,7 +2711,7 @@ run(function()
             flyCooldownActive = false
             lastGroundTouchTime = now
             
-            FlyAnywayProgressBarFrame.Frame.Size = udim2new(1, 0, 0, 20)
+            FlyAnywayProgressBarFrame.Frame.Size = udim2new(1, 0, 0, progressBarHeight)
             FlyAnywayProgressBarFrame.TextLabel.Text = string_format("%.1fs", MAX_FLY_TIME)
             FlyAnywayProgressBarFrame.Visible = FlyAnywayProgressBar.Enabled and Fly.Enabled
             
@@ -2739,7 +2728,7 @@ run(function()
             local timeLeft = math_max(0, groundtime - now)
             local progress = timeLeft / MAX_FLY_TIME
             
-            FlyAnywayProgressBarFrame.Frame.Size = udim2new(progress, 0, 0, 20)
+            FlyAnywayProgressBarFrame.Frame.Size = udim2new(progress, 0, 0, progressBarHeight)
             FlyAnywayProgressBarFrame.TextLabel.Text = string_format("%.1fs", timeLeft)
             FlyAnywayProgressBarFrame.Visible = FlyAnywayProgressBar.Enabled and Fly.Enabled
             
@@ -2967,27 +2956,75 @@ run(function()
         Name = 'Pop Balloons',
         Default = true
     })
-    
-    -- ===== ProgressBar (位置調整オプション追加版) =====
+
+    local function applyProgressBarSize()
+        if not FlyAnywayProgressBarFrame then return end
+
+        FlyAnywayProgressBarFrame.Size = udim2new(progressBarWidthScale, 0, 0, progressBarHeight)
+
+        local bar = FlyAnywayProgressBarFrame:FindFirstChild("Frame")
+        if bar then
+            bar.Size = udim2new(bar.Size.X.Scale, 0, 0, progressBarHeight)
+        end
+
+        local label = FlyAnywayProgressBarFrame:FindFirstChild("TextLabel")
+        if label then
+            label.TextSize = math_max(10, progressBarHeight - 4)
+        end
+    end
+
+    local ProgressBarWidth = Fly:CreateSlider({
+        Name = 'Progress Bar Width',
+        Min = 5,
+        Max = 80,
+        Default = 20,
+        Suffix = function(val)
+            return '%'
+        end,
+        Function = function(val)
+            if not val then return end
+            progressBarWidthScale = val / 100
+            applyProgressBarSize()
+        end
+    })
+
+    local ProgressBarHeight = Fly:CreateSlider({
+        Name = 'Progress Bar Height',
+        Min = 10,
+        Max = 80,
+        Default = 20,
+        Suffix = function(val)
+            return 'px'
+        end,
+        Function = function(val)
+            if not val then return end
+            progressBarHeight = val
+            applyProgressBarSize()
+        end
+    })
+
     FlyAnywayProgressBar = Fly:CreateToggle({
         Name = "Progress Bar",
         Function = function(callback)
             if callback then
+                progressBarWidthScale = (ProgressBarWidth and ProgressBarWidth.Value or 20) / 100
+                progressBarHeight = ProgressBarHeight and ProgressBarHeight.Value or 20
+
                 FlyAnywayProgressBarFrame = Instance.new("Frame")
-                FlyAnywayProgressBarFrame.Size = udim2new(0.2, 0, 0, 20)
+                FlyAnywayProgressBarFrame.AnchorPoint = Vector2.new(0.5, 0)
+                FlyAnywayProgressBarFrame.Position = udim2new(0.5, 0, 1, -200)
+                FlyAnywayProgressBarFrame.Size = udim2new(progressBarWidthScale, 0, 0, progressBarHeight)
                 FlyAnywayProgressBarFrame.BackgroundTransparency = 0.5
                 FlyAnywayProgressBarFrame.BorderSizePixel = 0
                 FlyAnywayProgressBarFrame.BackgroundColor3 = Color3.new(0, 0, 0)
                 FlyAnywayProgressBarFrame.Visible = false
                 FlyAnywayProgressBarFrame.Parent = vape.gui
                 
-                updateProgressBarPosition()
-
                 local FlyAnywayProgressBarFrame2 = Instance.new("Frame")
                 FlyAnywayProgressBarFrame2.Name = "Frame"
                 FlyAnywayProgressBarFrame2.AnchorPoint = Vector2.new(0, 0)
                 FlyAnywayProgressBarFrame2.Position = udim2new(0, 0, 0, 0)
-                FlyAnywayProgressBarFrame2.Size = udim2new(1, 0, 0, 20)
+                FlyAnywayProgressBarFrame2.Size = udim2new(1, 0, 0, progressBarHeight)
                 FlyAnywayProgressBarFrame2.BackgroundTransparency = 0
                 FlyAnywayProgressBarFrame2.BorderSizePixel = 0
                 FlyAnywayProgressBarFrame2.BackgroundColor3 = Color3.fromHSV(vape.GUIColor.Hue, vape.GUIColor.Sat, vape.GUIColor.Value)
@@ -3000,11 +3037,13 @@ run(function()
                 FlyAnywayProgressBartext.Font = Enum.Font.Gotham
                 FlyAnywayProgressBartext.TextStrokeTransparency = 0
                 FlyAnywayProgressBartext.TextColor3 = Color3.new(0.9, 0.9, 0.9)
-                FlyAnywayProgressBartext.TextSize = 20
+                FlyAnywayProgressBartext.TextSize = math_max(10, progressBarHeight - 4)
                 FlyAnywayProgressBartext.Size = udim2new(1, 0, 1, 0)
                 FlyAnywayProgressBartext.BackgroundTransparency = 1
                 FlyAnywayProgressBartext.Position = udim2new(0, 0, 0, 0)
                 FlyAnywayProgressBartext.Parent = FlyAnywayProgressBarFrame
+
+                applyProgressBarSize()
             else
                 if FlyAnywayProgressBarFrame then 
                     FlyAnywayProgressBarFrame:Destroy() 
@@ -3015,34 +3054,6 @@ run(function()
         Tooltip = "show amount of Fly time",
         Default = true
     })
-
-    Fly:CreateSlider({
-        Name = 'PB X Position',
-        Min = 0, Max = 100, Default = 50, Suffix = '%',
-        Function = function(val) PB_PosX = val; updateProgressBarPosition() end
-    })
-
-    Fly:CreateSlider({
-        Name = 'PB Y Offset',
-        Min = -500, Max = 500, Default = -200, Suffix = 'px',
-        Function = function(val) PB_PosY = val; updateProgressBarPosition() end
-    })
-
-    Fly:CreateDropdown({
-        Name = 'PB Anchor',
-        List = {'Bottom-Center', 'Top-Center', 'Center', 'Bottom-Right', 'Bottom-Left'},
-        Default = 'Bottom-Center',
-        Function = function(val)
-            if val == 'Bottom-Center' then PB_AnchorX, PB_AnchorY = 0.5, 0
-            elseif val == 'Top-Center' then PB_AnchorX, PB_AnchorY = 0.5, 1
-            elseif val == 'Center' then PB_AnchorX, PB_AnchorY = 0.5, 0.5
-            elseif val == 'Bottom-Right' then PB_AnchorX, PB_AnchorY = 1, 0
-            elseif val == 'Bottom-Left' then PB_AnchorX, PB_AnchorY = 0, 0 end
-            updateProgressBarPosition()
-        end
-    })
-    -- ================================================
-    
     TP = Fly:CreateToggle({
         Name = 'TP Down',
         Default = true
@@ -3057,8 +3068,6 @@ run(function()
         end
     })
 end)
-
-
 	
 run(function()
 	local Mode
