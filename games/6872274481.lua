@@ -15419,3 +15419,166 @@ run(function()
         end
     })
 end)
+
+run(function()
+	local TweenService = game:GetService("TweenService")
+	local Debris = game:GetService("Debris")
+
+	local BulletTracers
+	local Material
+	local Lifetime
+	local Curve
+	local Opacity
+	local Thickness
+	local Color
+	local Fade
+
+	local rayCheck = RaycastParams.new()
+	rayCheck.FilterType = Enum.RaycastFilterType.Exclude
+
+	-- 自前の放物線トレーサー描画関数
+	local function spawnArcTracer(origin, velocityUnit, velocityMagnitude, gravity, travelTime, curve, options)
+		local folder = Instance.new("Folder")
+		folder.Name = "ProjectileTracer"
+		folder.Parent = workspace
+
+		local initialVelocity = velocityUnit * velocityMagnitude
+		local gravityVector = Vector3.new(0, -gravity, 0)
+		local segments = math.clamp(math.floor(curve), 1, 100)
+		local timeStep = travelTime / segments
+
+		local prevPos = origin
+		local parts = {}
+
+		for i = 1, segments do
+			local t = i * timeStep
+			-- 物理位置計算: P = P0 + V0*t + 0.5*g*t^2
+			local currentPos = origin + (initialVelocity * t) + (0.5 * gravityVector * (t * t))
+			local distance = (currentPos - prevPos).Magnitude
+
+			if distance > 0.001 then
+				local tracerPart = Instance.new("Part")
+				tracerPart.Name = "TracerSegment"
+				tracerPart.Anchored = true
+				tracerPart.CanCollide = false
+				tracerPart.CanTouch = false
+				tracerPart.CanQuery = false
+				tracerPart.Material = options.Material or Enum.Material.SmoothPlastic
+				tracerPart.Color = options.Color or Color3.new(1, 1, 1)
+				tracerPart.Transparency = options.Transparency or 0
+				tracerPart.Size = Vector3.new(options.Thick or 0.1, options.Thick or 0.1, distance)
+				tracerPart.CFrame = CFrame.lookAt((prevPos + currentPos) / 2, currentPos)
+				tracerPart.Parent = folder
+
+				table.insert(parts, tracerPart)
+			end
+			prevPos = currentPos
+		end
+
+		local lifetime = options.Lifetime or 2
+		if options.Fade then
+			task.delay(lifetime, function()
+				local tweenInfo = TweenInfo.new(0.5, Enum.EasingStyle.Linear)
+				for _, part in ipairs(parts) do
+					if part and part.Parent then
+						TweenService:Create(part, tweenInfo, {Transparency = 1}):Play()
+					end
+				end
+				task.wait(0.5)
+				folder:Destroy()
+			end)
+		else
+			Debris:AddItem(folder, lifetime)
+		end
+	end
+
+	BulletTracers = vape.Categories.Render:CreateModule({
+		Name = 'ProjectileTracers',
+		Function = function(callback)
+			if callback then
+				BulletTracers:Clean(workspace.ChildAdded:Connect(function(projectile)
+					task.delay(0, function()
+						if not BulletTracers.Enabled or not projectile.Parent or projectile:GetAttribute('ProjectileShooter') ~= lplr.UserId then
+							return
+						end
+						local filter = {projectile}
+						if lplr.Character then table.insert(filter, lplr.Character) end
+						rayCheck.FilterDescendantsInstances = filter
+						local root = projectile:IsA('BasePart') and projectile or projectile:IsA('Model') and projectile.PrimaryPart
+						local meta = bedwars.ProjectileMeta[projectile.Name]
+						if not root or not meta then return end
+						local origin = root.Position
+						local velocity = root.AssemblyLinearVelocity
+						local velocityMagnitude = velocity.Magnitude
+						if velocityMagnitude <= 0 then
+							return
+						end
+						local velocityUnit = velocity / velocityMagnitude
+						local gravity = meta.gravitationalAcceleration or workspace.Gravity
+						local ray = workspace:Raycast(origin, velocityUnit * 2000, rayCheck)
+						local endpoint = ray and ray.Position or (origin + velocityUnit * 2000)
+						local travelTime = (endpoint - origin).Magnitude / velocityMagnitude
+
+						spawnArcTracer(origin, velocityUnit, velocityMagnitude, gravity, travelTime, Curve.Value, {
+							Color = Color3.fromHSV(Color.Hue, Color.Sat, Color.Value),
+							Transparency = Opacity.Value,
+							Thick = Thickness.Value,
+							Material = Enum.Material[Material.Value],
+							Lifetime = Lifetime.Value,
+							Fade = Fade.Enabled
+						})
+					end)
+				end))
+			end
+		end,
+		Tooltip = 'Replacement tracers for projectiles'
+	})
+
+	local materials = {'SmoothPlastic'}
+	for _, v in Enum.Material:GetEnumItems() do
+		if v.Name ~= 'SmoothPlastic' then
+			table.insert(materials, v.Name)
+		end
+	end
+	Material = BulletTracers:CreateDropdown({
+		Name = 'Material',
+		List = materials
+	})
+	Color = BulletTracers:CreateColorSlider({
+		Name = 'Tracer Color',
+		DefaultOpacity = 0.5
+	})
+	Thickness = BulletTracers:CreateSlider({
+		Name = 'Thickness',
+		Min = 0.01,
+		Max = 1,
+		Default = 0.1,
+		Decimal = 100
+	})
+	Curve = BulletTracers:CreateSlider({
+		Name = 'Curveness',
+		Min = 1,
+		Max = 100,
+		Default = 40,
+		Tooltip = 'How curve the projectile is gonna be\n(More curve = more lag)'
+	})
+	Opacity = BulletTracers:CreateSlider({
+		Name = 'Opacity',
+		Min = 0,
+		Max = 1,
+		Default = 0,
+		Decimal = 100
+	})
+	Lifetime = BulletTracers:CreateSlider({
+		Name = 'Lifetime',
+		Min = 0,
+		Max = 5,
+		Decimal = 100,
+		Default = 2,
+		Suffix = 'secs'
+	})
+	Fade = BulletTracers:CreateToggle({
+		Name = 'Fade',
+		Default = true
+	})
+end)
