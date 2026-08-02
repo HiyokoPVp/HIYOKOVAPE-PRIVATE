@@ -6206,38 +6206,6 @@ run(function()
 end)
 	
 run(function()
-	local ShopTierBypass
-	local tiered, nexttier = {}, {}
-	
-	ShopTierBypass = vape.Categories.Utility:CreateModule({
-		Name = 'ShopTierBypass',
-		Function = function(callback)
-			if callback then
-				repeat task.wait() until store.shopLoaded or not ShopTierBypass.Enabled
-				if ShopTierBypass.Enabled then
-					for _, v in bedwars.Shop.ShopItems do
-						tiered[v] = v.tiered
-						nexttier[v] = v.nextTier
-						v.nextTier = nil
-						v.tiered = nil
-					end
-				end
-			else
-				for i, v in tiered do
-					i.tiered = v
-				end
-				for i, v in nexttier do
-					i.nextTier = v
-				end
-				table.clear(nexttier)
-				table.clear(tiered)
-			end
-		end,
-		Tooltip = 'Lets you buy things like armor early.'
-	})
-end)
-	
-run(function()
 	local StaffDetector
 	local Mode
 	local Clans
@@ -7687,9 +7655,15 @@ run(function()
 			if SpeedPotion.Enabled and (not attribute or attribute == 'StatusEffect_speed') then
 				local speedpotion = getItem('speed_potion')
 				if speedpotion and (not lplr.Character:GetAttribute('StatusEffect_speed')) then
-					for _ = 1, 4 do
-						if bedwars.Client:Get(remotes.ConsumeItem):CallServer({item = speedpotion.tool}) then break end
-					end
+					task.spawn(function()
+						for _ = 1, 4 do
+							local result = false
+							bedwars.Client:Get(remotes.ConsumeItem):CallServerAsync({item = speedpotion.tool}):andThen(function(r)
+								result = r
+							end):await()
+							if result then break end
+						end
+					end)
 				end
 			end
 	
@@ -7723,10 +7697,17 @@ run(function()
 		Name = 'AutoConsume',
 		Function = function(callback)
 			if callback then
-				AutoConsume:Clean(vapeEvents.InventoryAmountChanged.Event:Connect(consumeCheck))
+				local throttle = 0
+				local throttledCheck = function()
+					local now = tick()
+					if now - throttle < 0.2 then return end
+					throttle = now
+					consumeCheck()
+				end
+				AutoConsume:Clean(vapeEvents.InventoryAmountChanged.Event:Connect(throttledCheck))
 				AutoConsume:Clean(vapeEvents.AttributeChanged.Event:Connect(function(attribute)
 					if attribute:find('Shield') or attribute:find('Health') or attribute == 'StatusEffect_speed' then
-						consumeCheck(attribute)
+						throttledCheck()
 					end
 				end))
 				consumeCheck()
@@ -7739,7 +7720,7 @@ run(function()
 		Min = 1,
 		Max = 99,
 		Default = 70,
-		Suffix = function(val) return '%' end
+		Suffix = '%'
 	})
 	SpeedPotion = AutoConsume:CreateToggle({
 		Name = 'Speed Potions',
