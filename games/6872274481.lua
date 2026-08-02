@@ -16262,4 +16262,3 @@ run(function()
         Tooltip = 'Minimum time between drinks'
     })
 end)
-
