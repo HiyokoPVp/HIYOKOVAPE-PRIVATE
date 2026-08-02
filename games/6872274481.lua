@@ -1725,6 +1725,23 @@ run(function()
 	end)
 end)
 
+-- hiyokovape function
+
+local function LocalGenCFrame(teamId)
+	
+	local id = teamId or lplr:GetAttribute("Team")
+	if not id then return nil end
+	
+	local valueName = string.format("cframe-%d_generator", id)
+	local cframeValue = workspace:FindFirstChild(valueName)
+	
+	if cframeValue and cframeValue:IsA("CFrameValue") then
+		return cframeValue.Value
+	end
+	
+	return nil
+end
+
 for _, v in {'AntiRagdoll', 'TriggerBot', 'SilentAim', 'AutoRejoin', 'Rejoin', 'Disabler', 'Timer', 'ServerHop', 'MouseTP', 'MurderMystery', 'NameTags'} do
 	vape:Remove(v)
 end
@@ -15582,5 +15599,34 @@ run(function()
 			end
 		end,
 		Tooltip = 'Notifies your current Bedwars Team ID when toggled.'
+	})
+end)
+
+run(function()
+	local TeamGenNotify = vape.Categories.Debug:CreateModule({
+		Name = 'Team Gen Pos',
+		Function = function(callback)
+			if callback then
+				local teamId = lplr:GetAttribute("Team")
+				if not teamId then
+					notif('Team Gen Pos', 'Failed to get Team ID', 5, 'alert')
+					return
+				end
+				
+				local genCFrame = LocalGenCFrame(teamId)
+				
+				if genCFrame then
+					local pos = genCFrame.Position
+					local msg = string.format("Team %d Generator: %.0f, %.0f, %.0f", 
+						teamId, pos.X, pos.Y, pos.Z)
+					notif('Team Gen Pos', msg, 8)
+				else
+					notif('Team Gen Pos', 
+						string.format('Generator not found (cframe-%d_generator)', teamId), 
+						5, 'alert')
+				end
+			end
+		end,
+		Tooltip = 'Notifies your team generator position from workspace CFrameValue.'
 	})
 end)
