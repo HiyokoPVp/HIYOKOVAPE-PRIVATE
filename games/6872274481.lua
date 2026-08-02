@@ -16277,6 +16277,19 @@ run(function()
         end
     end
 
+    -- ショップNPCのCFrameをマップ内から自動取得する関数
+    local function getShopCFrame()
+        for _, v in pairs(workspace:GetDescendants()) do
+            if v:IsA("Model") and (v.Name:lower():find("shop") or v.Name:lower():find("dummy")) then
+                local hrp = v:FindFirstChild("HumanoidRootPart") or v.PrimaryPart
+                if hrp then
+                    return hrp.CFrame
+                end
+            end
+        end
+        return nil
+    end
+
     -- 23 studs/s を超えないようにTween移動を行う関数
     local function tweenTo(targetCFrame)
         if not entitylib.isAlive then return end
@@ -16330,15 +16343,22 @@ run(function()
                         local ironItem = getItem("iron")
                         local ironCount = ironItem and ironItem.amount or 0
 
-                        -- 1. 鉄の回収 (自陣ジェネレーターへTween移動)
+                        -- 1. 羊毛がなく鉄も16個未満の場合：自陣ジェネレーターで鉄を回収
                         if (woolCount or 0) < 16 and ironCount < 16 then
                             local genCFrame = LocalGenCFrame()
                             if genCFrame then
                                 tweenTo(genCFrame + Vector3.new(0, 3, 0))
                             end
 
-                        -- 2. ブロック自動購入
-                        elseif ironCount >= 16 then
+                        -- 2. 鉄が16個以上溜まった場合：ショップへ直接移動してから羊毛を購入
+                        elseif ironCount >= 16 and (woolCount or 0) < 16 then
+                            local shopCFrame = getShopCFrame()
+                            if shopCFrame then
+                                -- ショップNPCの目の前（少し手前）まで安全速度で移動
+                                tweenTo(shopCFrame + Vector3.new(0, 3, 2))
+                            end
+
+                            -- ショップ到着後に購入リクエストを送信
                             pcall(function()
                                 bedwars.Client:Get(remotes.BedwarsPurchaseItem or "BedwarsPurchaseItem"):CallServerAsync({
                                     shopItem = {
@@ -16349,9 +16369,9 @@ run(function()
                                     }
                                 })
                             end)
-                            task.wait(0.2)
+                            task.wait(0.3)
 
-                        -- 3. ベッド・敵へのTween移動
+                        -- 3. ブロック補給完了後：敵のベッドやプレイヤーをターゲットに移動
                         else
                             local myTeam = lplr:GetAttribute("Team")
                             local targetBed = nil
@@ -16395,7 +16415,7 @@ run(function()
                     task.cancel(LoopThread)
                     LoopThread = nil
                 end
-                if currentTween then
+                if currentTween me:
                     currentTween:Cancel()
                     currentTween = nil
                 end
@@ -16408,6 +16428,6 @@ run(function()
                 setModuleState("AntiAFK", false)
             end
         end,
-        Tooltip = 'AutoQueueやAntiAFKを含む完全放置対応のHiyokoAutowinモジュール'
+        Tooltip = '16鉄溜まったら自分でショップへ移動して羊毛を購入する自動勝利モジュール'
     })
 end)
