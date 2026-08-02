@@ -15042,15 +15042,18 @@ run(function()
                         local hip = entitylib.character.HipHeight or 2
 
                         -- ① 高く飛ぶ
-                        local skyY = Height.Value
+                        -- 【修正】現在のRootPartのY座標を基準にHeightを足す
+                        local skyY = root.Position.Y + Height.Value
                         local upParams = RaycastParams.new()
                         upParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
                         upParams.FilterType = Enum.RaycastFilterType.Exclude
                         upParams.RespectCanCollide = true
                         upParams.CollisionGroup = root.CollisionGroup
+                        
+                        -- 【修正】Heightの距離だけ上方向にRayを飛ばす
                         local upRay = workspace:Raycast(
                             root.Position + Vector3.new(0, 2, 0),
-                            Vector3.new(0, math.max(skyY - root.Position.Y, 1), 0),
+                            Vector3.new(0, Height.Value, 0),
                             upParams
                         )
                         if upRay then
