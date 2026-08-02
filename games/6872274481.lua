@@ -16066,3 +16066,33 @@ run(function()
 		Tooltip = 'Notifies your team generator position from workspace CFrameValue.'
 	})
 end)
+
+run(function()
+	local stateNames = {
+		[0] = 'Lobby / Pre-Match',
+		[1] = 'In Match',
+		[2] = 'Match Ended',
+		[3] = 'Post Game',
+	}
+	local function stateLabel(s)
+		return tostring(s) .. ' (' .. (stateNames[s] or 'Unknown') .. ')'
+	end
+
+	local NotifyMatchState = vape.Categories.Debug:CreateModule({
+		Name = 'NotifyMatchState',
+		Function = function(callback)
+			if callback then
+				-- トグルした瞬間に現在の状態を通知
+				notif('NotifyMatchState', 'MatchState: ' .. stateLabel(store.matchState), 5)
+
+				-- 有効中に状態が変わったら都度通知
+				NotifyMatchState:Clean(bedwars.Store.changed:connect(function(new, old)
+					if new.Game ~= old.Game and new.Game.matchState ~= old.Game.matchState then
+						notif('NotifyMatchState', 'MatchState changed: ' .. stateLabel(new.Game.matchState), 5)
+					end
+				end))
+			end
+		end,
+		Tooltip = 'Notifies the current match state (1 = in match, 2 = ended, 3 = post game)'
+	})
+end)
