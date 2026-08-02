@@ -16096,3 +16096,47 @@ run(function()
 		Tooltip = 'Notifies the current match state (1 = in match, 2 = ended, 3 = post game)'
 	})
 end)
+
+run(function()
+    local NotifyItem = vape.Categories.Debug:CreateModule({
+        Name = 'NotifyItem',
+        Function = function(callback)
+            if callback then
+                local itemList = {}
+                
+                -- 1. メインのインベントリアイテムを取得
+                if store and store.inventory and store.inventory.inventory and store.inventory.inventory.items then
+                    for _, item in pairs(store.inventory.inventory.items) do
+                        if item and item.itemType then
+                            local meta = bedwars.ItemMeta and bedwars.ItemMeta[item.itemType]
+                            local displayName = (meta and meta.displayName) or item.itemType
+                            local amount = item.amount or 1
+                            table.insert(itemList, displayName .. " x" .. amount)
+                        end
+                    end
+                end
+                
+                -- 2. 装備（アーマー）を取得
+                if store and store.inventory and store.inventory.inventory and store.inventory.inventory.armor then
+                    for _, item in pairs(store.inventory.inventory.armor) do
+                        if item and item ~= 'empty' and item.itemType then
+                            local meta = bedwars.ItemMeta and bedwars.ItemMeta[item.itemType]
+                            local displayName = (meta and meta.displayName) or item.itemType
+                            table.insert(itemList, "[Armor] " .. displayName)
+                        end
+                    end
+                end
+
+                -- 3. 通知を送信
+                if #itemList > 0 then
+                    local message = table.concat(itemList, ", ")
+                    -- 通知が長くなりすぎた場合の考慮（必要に応じて調整）
+                    notif('NotifyItem', message, 10)
+                else
+                    notif('NotifyItem', 'Inventory is empty', 5, 'alert')
+                end
+            end
+        end,
+        Tooltip = 'Notifies the items currently in your inventory when toggled.'
+    })
+end)
