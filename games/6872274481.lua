@@ -14901,22 +14901,6 @@ run(function()
     -- BindToRenderStep用ユニーク名
     local camBindName = 'AntiHitCamFix'
 
-    -- 【追加】Y固定用のインスタンスを保持する変数
-    local activeAttachment
-    local activeVelocity
-
-    -- 【追加】Y固定（落下防止）を解除・クリーンアップする関数
-    local function cleanVelocity()
-        if activeVelocity then
-            activeVelocity:Destroy()
-            activeVelocity = nil
-        end
-        if activeAttachment then
-            activeAttachment:Destroy()
-            activeAttachment = nil
-        end
-    end
-
     -------------------------------------------------------
     -- 近くに敵がいるかチェック
     -------------------------------------------------------
@@ -14964,17 +14948,21 @@ run(function()
 
     -------------------------------------------------------
     -- カメラ補正（向きはそのまま / 位置Yだけ地面に固定）
+    -- CameraSubjectは変えないのでマウス視点は壊れない
     -------------------------------------------------------
     local function bindCameraFix()
         runService:BindToRenderStep(
             camBindName,
-            Enum.RenderPriority.Camera.Value + 5,
+            Enum.RenderPriority.Camera.Value + 5, -- カメラ更新の“直後”に実行
             function()
+                -- 実際にテレポート中以外は補正しない（＝通常カメラのまま）
                 if not antiHitActive or not entitylib.isAlive then
                     return
                 end
 
                 local root = entitylib.character.RootPart
+
+                -- 地面のYを取得
                 groundRay.FilterDescendantsInstances = {lplr.Character, gameCamera}
                 groundRay.CollisionGroup = root.CollisionGroup
                 local ray = workspace:Raycast(
@@ -14983,19 +14971,24 @@ run(function()
                     groundRay
                 )
                 if not ray then
-                    return 
+                    return -- 奈落（地面なし）なら補正しない
                 end
 
                 local groundY = ray.Position.Y + (entitylib.character.HipHeight or 2)
+                -- 注視点を“地面レベルの頭の高さ”に固定
                 local focus = Vector3.new(root.Position.X, groundY + 1, root.Position.Z)
 
+                -- 現在のカメラの“向き”をそのまま保持
                 local cf = gameCamera.CFrame
                 local look = cf.LookVector
+
+                -- 現在のズーム距離（1人称時は小さくなるのでガード）
                 local dist = (gameCamera.Focus.Position - cf.Position).Magnitude
                 if not (dist == dist) or dist < 0.1 then
                     dist = 0.5
                 end
 
+                -- 向きは変えず、位置だけ「地面注視点 - 向き*距離」に移動
                 local newPos = focus - look * dist
                 gameCamera.CFrame = CFrame.fromMatrix(newPos, cf.RightVector, cf.UpVector)
             end
@@ -15005,55 +14998,57 @@ run(function()
     -------------------------------------------------------
     -- モジュール本体
     -------------------------------------------------------
-    AntiHit = vape.Categories.Rage:CreateModule({
-        Name = 'AntiHit',
+    AntiHit = vape.Categories.oldModule:CreateModule({
+        Name = 'oldAntiHit',
         Function = function(callback)
             if callback then
                 antiHitActive = false
 
+                -- カメラ補正を登録（CameraSubjectは一切触らない）
                 bindCameraFix()
                 AntiHit:Clean(function()
                     pcall(function()
                         runService:UnbindFromRenderStep(camBindName)
                     end)
-                    cleanVelocity() -- 【追加】モジュール無効化時に落下防止を解除
                     antiHitActive = false
                 end)
 
+                -- メインループ
                 task.spawn(function()
                     while AntiHit.Enabled do
                         local root = entitylib.character and entitylib.character.RootPart
                         local alive = entitylib.isAlive
                         local owner = root and isnetworkowner(root)
 
+                        -- 生存 / 所有チェック
                         if not alive or not owner then
                             antiHitActive = false
                             task.wait(0.1)
                             continue
                         end
 
+                        -- OnlyTargeting: 敵が近くにいないならスキップ（カメラも通常）
                         if not isEnemyNearby() then
                             antiHitActive = false
                             task.wait(0.1)
                             continue
                         end
 
+                        -- ここからテレポート開始 → カメラ補正ON
                         antiHitActive = true
+
                         local hip = entitylib.character.HipHeight or 2
 
-                        -- ① 高く飛ぶ
-                        -- 【修正】現在のRootPartのY座標を基準にHeightを足す
-                        local skyY = root.Position.Y + Height.Value
+                        -- ① 高く飛ぶ（天井＆めり込みチェック付き）
+                        local skyY = Height.Value
                         local upParams = RaycastParams.new()
                         upParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
                         upParams.FilterType = Enum.RaycastFilterType.Exclude
                         upParams.RespectCanCollide = true
                         upParams.CollisionGroup = root.CollisionGroup
-                        
-                        -- 【修正】Heightの距離だけ上方向にRayを飛ばす
                         local upRay = workspace:Raycast(
                             root.Position + Vector3.new(0, 2, 0),
-                            Vector3.new(0, Height.Value, 0),
+                            Vector3.new(0, math.max(skyY - root.Position.Y, 1), 0),
                             upParams
                         )
                         if upRay then
@@ -15062,7 +15057,6 @@ run(function()
                                 skyY = root.Position.Y + 3
                             end
                         end
-                        
                         local skyPos = Vector3.new(root.Position.X, skyY, root.Position.Z)
                         if isBodyClear(skyPos, root) then
                             root.CFrame = CFrame.new(skyPos)
@@ -15070,29 +15064,12 @@ run(function()
                                 root.AssemblyLinearVelocity.X, 0,
                                 root.AssemblyLinearVelocity.Z
                             )
-
-                            -- 【追加】上空にいる間、落下しないようにY軸の速度を0に固定する
-                            cleanVelocity()
-                            activeAttachment = Instance.new("Attachment")
-                            activeAttachment.Parent = root
-                            
-                            activeVelocity = Instance.new("LinearVelocity")
-                            activeVelocity.Attachment0 = activeAttachment
-                            activeVelocity.RelativeTo = Enum.ActuatorRelativeTo.World -- ワールド基準
-                            activeVelocity.VelocityConstraintMode = Enum.VelocityConstraintMode.Line
-                            activeVelocity.LineDirection = Vector3.new(0, 1, 0) -- Y軸に対してのみ作用
-                            activeVelocity.LineVelocity = 0 -- Y軸の速度を0に
-                            activeVelocity.MaxForce = 9e9 -- 重力に負けない力
-                            activeVelocity.Parent = root
                         end
 
                         -- ② 上空で待機
                         task.wait(AirTime.Value)
 
-                        -- 【追加】地面に戻る前にY固定（落下防止）を解除
-                        cleanVelocity()
-
-                        -- ③ 地面に戻る
+                        -- ③ 地面に戻る（奈落＆窒息チェック付き）
                         if entitylib.isAlive and AntiHit.Enabled then
                             local ray2 = workspace:Raycast(
                                 root.Position + Vector3.new(0, 2, 0),
@@ -15112,6 +15089,7 @@ run(function()
                                     )
                                 end
                             end
+                            -- 頭上にブロック/奈落なら戻らず上空に留まる
                         end
 
                         -- ④ 地面で少し待機 → ①に戻る
@@ -15121,14 +15099,14 @@ run(function()
                     antiHitActive = false
                 end)
             else
+                -- 無効化時
                 pcall(function()
                     runService:UnbindFromRenderStep(camBindName)
                 end)
-                cleanVelocity() -- 【追加】
                 antiHitActive = false
             end
         end,
-        Tooltip = 'Dodges attacks by bouncing sky/ground. Camera stays normal (mouse aim intact); no suffocation/void.'
+        Tooltip = 'oldModule it might not working'
     })
 
     -------------------------------------------------------
@@ -15137,8 +15115,8 @@ run(function()
     Height = AntiHit:CreateSlider({
         Name = 'Height',
         Min = 50,
-        Max = 200,
-        Default = 150,
+        Max = 500,
+        Default = 80,
         Suffix = function(val)
             return val == 1 and 'stud' or 'studs'
         end
@@ -15147,7 +15125,7 @@ run(function()
     AirTime = AntiHit:CreateSlider({
         Name = 'Air Time',
         Min = 0.1,
-        Max = 2,
+        Max = 3,
         Default = 0.7,
         Decimal = 10,
         Suffix = 'seconds'
@@ -15156,8 +15134,8 @@ run(function()
     GroundTime = AntiHit:CreateSlider({
         Name = 'Ground Time',
         Min = 0,
-        Max = 0.5,
-        Default = 0.15,
+        Max = 1,
+        Default = 0.1,
         Decimal = 100,
         Suffix = 'seconds'
     })
@@ -15182,6 +15160,262 @@ run(function()
         Visible = false,
         Suffix = function(val)
             return val == 1 and 'stud' or 'studs'
+        end
+    })
+end)
+
+run(function()
+    local TweenService = game:GetService("TweenService")
+    
+    local GodKill
+    local Range
+    local Height
+    local Interval
+    local GroundStayTime
+    local AllowTween
+    local TweenSpeed -- 追加：速度調整用
+    
+    local isOnGround = false
+    local groundTimer = 0
+    local lastDropTime = 0
+    local currentTween = nil
+
+    GodKill = vape.Categories.oldModule:CreateModule({
+        Name = 'oldGodKill',
+        Function = function(callback)
+            if callback then
+                lastDropTime = tick()
+                isOnGround = false
+                groundTimer = 0
+                
+                GodKill:Clean(runService.Heartbeat:Connect(function()
+                    if not entitylib.isAlive then return end
+                    
+                    local target = entitylib.EntityPosition({
+                        Range = Range.Value,
+                        Part = 'RootPart',
+                        Players = true,
+                        Sort = sortmethods.Distance
+                    })
+
+                    if target and target.Humanoid and target.Humanoid.Health > 0 then
+                        local root = entitylib.character.RootPart
+                        local targetPos = target.RootPart.Position
+                        
+                        if not isOnGround then
+                            -- 【修正】上空のブロック判定と絶対埋まらない安全な高さの計算
+                            local desiredHeight = Height.Value
+                            local safeY = targetPos.Y + desiredHeight
+                            
+                            local rayParams = RaycastParams.new()
+                            rayParams.FilterDescendantsInstances = {lplr.Character, target.Character}
+                            rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                            
+                            -- 自分の現在の足元から、ターゲット上空の目標地点へ向けてレイを飛ばす
+                            -- これにより、移動経路にある天井や障害物をすべて検知する
+                            local rayOrigin = root.Position
+                            local rayDirection = Vector3.new(targetPos.X - rayOrigin.X, safeY - rayOrigin.Y, targetPos.Z - rayOrigin.Z)
+                            local rayResult = workspace:Raycast(rayOrigin, rayDirection, rayParams)
+                            
+                            if rayResult then
+                                -- 天井に当たった場合、ヒットしたY座標から「頭が埋まらない安全マージン」を引く
+                                -- キャラクターのHipHeight(約2) + 胴体と頭の分の余裕(約3.5)を考慮
+                                local humanoid = entitylib.character.Humanoid
+                                local characterHeightOffset = (humanoid.HipHeight or 2) + 3.5
+                                
+                                -- 当たった位置のすぐ下を限界値にする（絶対にめり込ませない）
+                                safeY = rayResult.Position.Y - characterHeightOffset
+                                
+                                -- 万が一、ターゲットの足元より低くなってしまう場合はターゲットの少し上に固定
+                                if safeY < targetPos.Y + 3 then
+                                    safeY = targetPos.Y + 3
+                                end
+                            end
+
+                            local targetCFrame = CFrame.new(targetPos.X, safeY, targetPos.Z)
+                            
+                            -- AllowTweenがオンの場合
+                            if AllowTween.Value then
+                                if currentTween then 
+                                    currentTween:Cancel() 
+                                end
+                                
+                                -- スライダーの値を秒数に変換 (0 = 0.01秒の超高速 / 10 = 1.0秒の低速)
+                                -- 0のときに止まるのを防ぐため、0.01をベースにしています
+                                local duration = math.max(0.01, TweenSpeed.Value * 0.1)
+                                
+                                local tweenInfo = TweenInfo.new(duration, Enum.EasingStyle.Linear, Enum.EasingDirection.Out)
+                                currentTween = TweenService:Create(root, tweenInfo, {CFrame = targetCFrame})
+                                currentTween:Play()
+                            else
+                                -- オフの場合は瞬時にテレポート
+                                root.CFrame = targetCFrame
+                            end
+                            
+                            -- 地面に落とすタイミングかチェック
+                            if tick() - lastDropTime >= Interval.Value then
+                                lastDropTime = tick()
+                                
+                                -- Raycastで地面の高さを検出
+                                local groundRayParams = RaycastParams.new()
+                                groundRayParams.FilterDescendantsInstances = {lplr.Character}
+                                groundRayParams.CollisionGroup = root.CollisionGroup
+                                
+                                local rayOriginDrop = targetPos + Vector3.new(0, 2, 0)
+                                local rayDirectionDrop = Vector3.new(0, -30, 0)
+                                local rayResultDrop = workspace:Raycast(rayOriginDrop, rayDirectionDrop, groundRayParams)
+                                
+                                local groundY = targetPos.Y + 1
+                                if rayResultDrop then
+                                    local hipHeight = entitylib.character.Humanoid.HipHeight or 2
+                                    groundY = rayResultDrop.Position.Y + hipHeight
+                                end
+                                
+                                -- 下降はラグをなくすため常に瞬時
+                                root.CFrame = CFrame.new(targetPos.X, groundY, targetPos.Z)
+                                
+                                isOnGround = true
+                                groundTimer = tick()
+                            end
+                        else
+                            -- 地面滞在時間が経過したら空中に戻る状態へ
+                            if tick() - groundTimer >= GroundStayTime.Value then
+                                isOnGround = false
+                            end
+                        end
+                    else
+                        -- ターゲットがいない、または死亡した場合はリセット
+                        isOnGround = false
+                        if currentTween then 
+                            currentTween:Cancel() 
+                        end
+                    end
+                end))
+            else
+                -- モジュールがオフになったときにリセット
+                isOnGround = false
+                if currentTween then 
+                    currentTween:Cancel() 
+                end
+            end
+        end,
+        Tooltip = 'oldModule might not working'
+    })
+
+    Range = GodKill:CreateSlider({
+        Name = 'Range',
+        Min = 1,
+        Max = 30,
+        Default = 14.4,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    })
+    
+    Height = GodKill:CreateSlider({
+        Name = 'Height',
+        Min = 5,
+        Max = 50,
+        Default = 18,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    })
+    
+    Interval = GodKill:CreateSlider({
+        Name = 'Drop Interval',
+        Min = 0.5,
+        Max = 5,
+        Default = 2,
+        Decimal = 10,
+        Suffix = 's'
+    })
+
+    GroundStayTime = GodKill:CreateSlider({
+        Name = 'Ground Stay Time',
+        Min = 0.05,
+        Max = 1.0,
+        Default = 0.1,
+        Decimal = 100,
+        Suffix = 's',
+        Tooltip = 'How long you stay on the ground before returning to the sky.'
+    })
+
+    AllowTween = GodKill:CreateToggle({
+        Name = 'Allow Tween',
+        Default = false,
+        Tooltip = 'If enabled, uses a tween to go up. If disabled, teleports instantly.'
+    })
+
+    -- 追加：Tweenの速さを調整するスライダー (0 = 最速, 10 = 遅い)
+    TweenSpeed = GodKill:CreateSlider({
+        Name = 'Tween Speed',
+        Min = 0,
+        Max = 10,
+        Default = 0,
+        Decimal = 10,
+        Suffix = function(val) return val == 0 and '' or '' end,
+        Tooltip = '0 is nearly instant, 10 is slow.'
+    })
+end)
+
+local InfiniteFly
+run(function()
+    local HiddenPart = Instance.new('Part')
+    HiddenPart.Parent = workspace
+    HiddenPart.Transparency = 1
+    HiddenPart.CanQuery = false
+    HiddenPart.CanTouch = false
+    HiddenPart.CanCollide = false
+    HiddenPart.Anchored = true
+
+    local oldTransparency = {}
+    local function doCharacterThing()
+        if entitylib.isAlive then
+            for index, value in entitylib.character.Character:GetDescendants() do
+                if value:IsA('Part') or value:IsA('BasePart') then
+                    oldTransparency[value] = value.Transparency
+
+                    value.Transparency = 1
+                end
+            end
+        end
+    end
+
+    local function revertCharacter()
+        if entitylib.isAlive then
+            for index, value in entitylib.character.Character:GetDescendants() do
+                if value:IsA('Part') or value:IsA('BasePart') then
+                    value.Transparency = oldTransparency[value]
+                end
+            end
+        end
+    end
+
+    InfiniteFly = vape.Categories.oldModule:CreateModule({
+        Name = 'InfiniteFly',
+        Function = function(callback)
+            gameCamera.CameraSubject = callback and HiddenPart or entitylib.character.Character
+
+            if callback then
+                doCharacterThing()
+                HiddenPart.CFrame = entitylib.character.Character.Head.CFrame
+
+                entitylib.character.RootPart.CFrame = CFrame.new(Vector3.new(entitylib.character.RootPart.CFrame.X, 210, entitylib.character.RootPart.CFrame.Z))
+
+                InfiniteFly:Clean(runService.RenderStepped:Connect(function(dt: number)
+                    if not entitylib.isAlive then
+                        return
+                    end
+
+                    HiddenPart.CFrame = CFrame.new(Vector3.new(entitylib.character.RootPart.Position.X, HiddenPart.CFrame.Y, entitylib.character.RootPart.Position.Z))
+
+                    if entitylib.character.RootPart.CFrame.Y < -75 then
+                        entitylib.character.RootPart.CFrame = CFrame.new(Vector3.new(entitylib.character.RootPart.CFrame.X, 210, entitylib.character.RootPart.CFrame.Z))
+                    end
+                end))
+            else
+                revertCharacter()
+            end
+        end,
+        ExtraText = function()
+            return 'Heatseeker'
         end
     })
 end)
