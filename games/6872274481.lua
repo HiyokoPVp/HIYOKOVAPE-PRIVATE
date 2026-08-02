@@ -16255,3 +16255,103 @@ run(function()
         Tooltip = 'Notifies the items currently in your inventory when toggled.'
     })
 end)
+
+run(function()
+    local AutoDrinkSpeed
+    local CheckEffect
+    local Delay
+    local lastDrink = 0
+
+    -- 「Speed Potion」またはそれに非常に似た名前かを判定
+    local function isSpeedPotion(itemType)
+        if not itemType then return false end
+        local lower = itemType:lower()
+        -- itemType 直接一致 / 部分一致
+        if lower == 'speed_potion' or lower:find('speed_potion', 1, true) then
+            return true
+        end
+        -- displayName ベースのファジー判定（"speed" と "potion" を両方含む）
+        local meta = bedwars.ItemMeta[itemType]
+        if meta and meta.displayName then
+            local name = meta.displayName:lower()
+            if name:find('speed', 1, true) and name:find('potion', 1, true) then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- 手持ち → インベントリの順に探す
+    local function findSpeedPotion()
+        if store.hand and store.hand.tool and isSpeedPotion(store.hand.tool.Name) then
+            return store.hand.tool
+        end
+        for _, item in store.inventory.inventory.items do
+            if item and item.itemType and isSpeedPotion(item.itemType) then
+                return item.tool
+            end
+        end
+        return nil
+    end
+
+    local function drink(tool)
+        task.spawn(function()
+            local args = {
+                {
+                    item = tool
+                }
+            }
+            pcall(function()
+                game:GetService("ReplicatedStorage")
+                    :WaitForChild("rbxts_include")
+                    :WaitForChild("node_modules")
+                    :WaitForChild("@rbxts")
+                    :WaitForChild("net")
+                    :WaitForChild("out")
+                    :WaitForChild("_NetManaged")
+                    :WaitForChild("ConsumeItem")
+                    :InvokeServer(unpack(args))
+            end)
+        end)
+    end
+
+    AutoDrinkSpeed = vape.Categories.Inventory:CreateModule({
+        Name = 'AutoDrinkSpeed',
+        Function = function(callback)
+            if callback then
+                repeat
+                    if entitylib.isAlive and (tick() - lastDrink) >= Delay.Value then
+                        local hasSpeed = lplr.Character
+                            and lplr.Character:GetAttribute('StatusEffect_speed')
+                        -- CheckEffect が ON のときは、既に速度効果があれば飲まない
+                        if not (CheckEffect.Enabled and hasSpeed) then
+                            local tool = findSpeedPotion()
+                            if tool then
+                                drink(tool)
+                                lastDrink = tick()
+                            end
+                        end
+                    end
+                    task.wait(0.3)
+                until not AutoDrinkSpeed.Enabled
+            end
+        end,
+        Tooltip = 'Automatically drinks speed potions found in your hand or inventory.'
+    })
+
+    CheckEffect = AutoDrinkSpeed:CreateToggle({
+        Name = 'Check Effect',
+        Default = true,
+        Tooltip = 'Only drinks when you do not already have a speed effect'
+    })
+
+    Delay = AutoDrinkSpeed:CreateSlider({
+        Name = 'Delay',
+        Min = 0,
+        Max = 10,
+        Default = 1,
+        Decimal = 10,
+        Suffix = 'seconds',
+        Tooltip = 'Minimum time between drinks'
+    })
+end)
