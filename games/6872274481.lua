@@ -16029,3 +16029,45 @@ run(function()
 		Tooltip = 'Notifies your team generator position from workspace CFrameValue.'
 	})
 end)
+
+run(function()
+    local NotifyMatchState
+    local lastState = 0 -- 前回の状態を保存して、変化があった時だけ通知する
+
+    NotifyMatchState = vape.Categories.Debug:CreateModule({
+        Name = 'NotifyMatchState',
+        Function = function(callback)
+            if callback then
+                -- 初期状態を記録
+                lastState = store.matchState
+                
+                -- store.changed イベントを利用して状態の変化を検知
+                NotifyMatchState:Clean(bedwars.Store.changed:Connect(function(new, old)
+                    if not NotifyMatchState.Enabled then return end
+                    
+                    -- Gameテーブル内のmatchStateが変更されたかチェック
+                    if new.Game and old.Game and new.Game.matchState ~= old.Game.matchState then
+                        local newState = new.Game.matchState
+                        lastState = newState
+                        
+                        -- 数値に応じた簡単な説明文（推測）
+                        local stateText = "Unknown"
+                        if newState == 0 then
+                            stateText = "Lobby/Waiting"
+                        elseif newState == 1 then
+                            stateText = "In Match"
+                        elseif newState == 2 then
+                            stateText = "Match Ended"
+                        end
+
+                        -- 通知を表示
+                        notif('MatchState', string.format('State changed to: %d (%s)', newState, stateText), 5)
+                    end
+                end))
+            else
+                -- 無効化時のクリーンアップは Clean関数で自動的に行われるため不要
+            end
+        end,
+        Tooltip = 'Notifies when the match state changes (0=Lobby, 1=Playing, 2=Ended)'
+    })
+end)
