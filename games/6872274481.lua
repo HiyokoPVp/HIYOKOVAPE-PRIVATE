@@ -16269,11 +16269,11 @@ run(function()
     local LoopThread
     local currentTween = nil
 
-    -- モジュールの有効化/無効化を行うヘルパー関数
+    -- モジュールの有効化/無効化を行うヘルパー関数（nilチェック保護を追加）
     local function setModuleState(name, state)
-        local mod = vape.Modules[name]
-        if mod and mod.Enabled ~= state then
-            mod:Toggle()
+        local mod = vape and vape.Modules and vape.Modules[name]
+        if mod and mod.Enabled ~= state and type(mod.Toggle) == "function" then
+            pcall(function() mod:Toggle() end)
         end
     end
 
@@ -16292,8 +16292,10 @@ run(function()
 
     -- 23 studs/s を超えないようにTween移動を行う関数
     local function tweenTo(targetCFrame)
-        if not entitylib.isAlive then return end
-        local root = entitylib.character.RootPart
+        if not entitylib or not entitylib.isAlive then return end
+        local root = entitylib.character and entitylib.character.RootPart
+        if not root then return end
+
         local currentPos = root.Position
         local targetPos = targetCFrame.Position
         local distance = (targetPos - currentPos).Magnitude
@@ -16304,7 +16306,7 @@ run(function()
         local timeToMove = distance / speed
 
         if currentTween then
-            currentTween:Cancel()
+            pcall(function() currentTween:Cancel() end)
         end
 
         local tweenInfo = TweenInfo.new(timeToMove, Enum.EasingStyle.Linear)
@@ -16318,7 +16320,7 @@ run(function()
             if conn then conn:Disconnect() end
         end)
 
-        while not completed and HiyokoAutowin.Enabled and entitylib.isAlive do
+        while not completed and HiyokoAutowin and HiyokoAutowin.Enabled and entitylib and entitylib.isAlive do
             task.wait(0.05)
         end
     end
@@ -16335,30 +16337,40 @@ run(function()
                 setModuleState("AntiAFK", true)
 
                 LoopThread = task.spawn(function()
-                    while HiyokoAutowin.Enabled do
+                    while HiyokoAutowin and HiyokoAutowin.Enabled do
                         task.wait(0.1)
-                        if not entitylib.isAlive then continue end
+                        if not entitylib or not entitylib.isAlive then continue end
 
-                        local woolName, woolCount = getWool()
-                        local ironItem = getItem("iron")
-                        local ironCount = ironItem and ironItem.amount or 0
+                        local root = entitylib.character and entitylib.character.RootPart
+                        if not root then continue end
+
+                        -- 外部関数の安全呼び出し
+                        local woolCount = 0
+                        if type(getWool) == "function" then
+                            local success, _, count = pcall(getWool)
+                            if success then woolCount = count or 0 end
+                        end
+
+                        local ironCount = 0
+                        if type(getItem) == "function" then
+                            local success, ironItem = pcall(getItem, "iron")
+                            if success and ironItem then ironCount = ironItem.amount or 0 end
+                        end
 
                         -- 1. 羊毛がなく鉄も16個未満の場合：自陣ジェネレーターで鉄を回収
-                        if (woolCount or 0) < 16 and ironCount < 16 then
-                            local genCFrame = LocalGenCFrame()
+                        if woolCount < 16 and ironCount < 16 then
+                            local genCFrame = type(LocalGenCFrame) == "function" and LocalGenCFrame() or nil
                             if genCFrame then
                                 tweenTo(genCFrame + Vector3.new(0, 3, 0))
                             end
 
-                        -- 2. 鉄が16個以上溜まった場合：ショップへ直接移動してから羊毛を購入
-                        elseif ironCount >= 16 and (woolCount or 0) < 16 then
+                        -- 2. 鉄が16個以上溜まった場合：ショップへ移動して購入
+                        elseif ironCount >= 16 and woolCount < 16 then
                             local shopCFrame = getShopCFrame()
                             if shopCFrame then
-                                -- ショップNPCの目の前（少し手前）まで安全速度で移動
                                 tweenTo(shopCFrame + Vector3.new(0, 3, 2))
                             end
 
-                            -- ショップ到着後に購入リクエストを送信
                             pcall(function()
                                 bedwars.Client:Get(remotes.BedwarsPurchaseItem or "BedwarsPurchaseItem"):CallServerAsync({
                                     shopItem = {
@@ -16371,41 +16383,49 @@ run(function()
                             end)
                             task.wait(0.3)
 
-                        -- 3. ブロック補給完了後：敵のベッドやプレイヤーをターゲットに移動
+                        -- 3. 一番近い敵ベッドまたは一番近い敵へ移動
                         else
                             local myTeam = lplr:GetAttribute("Team")
-                            local targetBed = nil
+                            local nearestBed = nil
+                            local minBedDist = math.huge
+                            local rootPos = root.Position
 
+                            -- 【一番近い敵ベッドを探索】
                             for _, v in pairs(workspace:GetDescendants()) do
                                 if v.Name == "bed" and v:IsA("BasePart") then
                                     local bedTeam = v:GetAttribute("TeamId") or v:GetAttribute("Team")
                                     if bedTeam and bedTeam ~= myTeam then
-                                        targetBed = v
-                                        break
+                                        local dist = (v.Position - rootPos).Magnitude
+                                        if dist < minBedDist then
+                                            minBedDist = dist
+                                            nearestBed = v
+                                        end
                                     end
                                 end
                             end
 
-                            if targetBed then
-                                tweenTo(targetBed.CFrame + Vector3.new(0, 3, 0))
+                            if nearestBed then
+                                tweenTo(nearestBed.CFrame + Vector3.new(0, 3, 0))
                             else
+                                -- ベッドが無い場合は一番近い敵をターゲットに移動
                                 local closestEnemy = nil
                                 local minDist = math.huge
-                                local rootPos = entitylib.character.RootPart.Position
 
-                                for _, ent in pairs(entitylib.List) do
-                                    if ent.Targetable and ent.Health > 0 and ent.RootPart then
-                                        local dist = (ent.RootPart.Position - rootPos).Magnitude
-                                        if dist < minDist then
-                                            minDist = dist
-                                            closestEnemy = ent
+                                if entitylib and entitylib.List then
+                                    for _, ent in pairs(entitylib.List) do
+                                        if ent.Targetable and ent.Health > 0 and ent.RootPart then
+                                            local dist = (ent.RootPart.Position - rootPos).Magnitude
+                                            if dist < minDist then
+                                                minDist = dist
+                                                closestEnemy = ent
+                                            end
                                         end
                                     end
                                 end
 
                                 if closestEnemy then
                                     tweenTo(closestEnemy.RootPart.CFrame + Vector3.new(0, 0, 2))
-                                end
+                                me
                             end
                         end
                     end
@@ -16415,8 +16435,8 @@ run(function()
                     task.cancel(LoopThread)
                     LoopThread = nil
                 end
-                if currentTween me:
-                    currentTween:Cancel()
+                if currentTween then
+                    pcall(function() currentTween:Cancel() end)
                     currentTween = nil
                 end
 
@@ -16428,6 +16448,6 @@ run(function()
                 setModuleState("AntiAFK", false)
             end
         end,
-        Tooltip = '16鉄溜まったら自分でショップへ移動して羊毛を購入する自動勝利モジュール'
+        Tooltip = '1番近い敵ベッドを優先し、エラー落ちを防ぐ安全判定を追加した完全自動化モジュール'
     })
 end)
