@@ -4825,10 +4825,11 @@ local RESOURCE_CONFIG = {
 
 local EQUIPMENT_SLOTS = { 'Hand', 'Helmet', 'Chestplate', 'Boots', 'Kit' }
 
-local DEVICE_COLORS = {
-	PC      = Color3.fromRGB(130, 200, 130),
-	Mobile  = Color3.fromRGB(255, 190, 80),
-	Console = Color3.fromRGB(130, 170, 255),
+-- ★修正: デバイスは絵文字で表示 (テキストより見やすい)
+local DEVICE_EMOJI = {
+	PC      = '💻',
+	Mobile  = '📱',
+	Console = '🎮',
 }
 
 local Strings, Sizes, Reference = {}, {}, {}
@@ -4837,14 +4838,11 @@ Folder.Parent = vape.gui
 local methodused
 local refreshNametag
 
--- =========================================================
--- ★修正点: オプションは全て local 化 (UIScale上書きエラー対策)
--- =========================================================
+-- オプションは全て local 化 (UIScale上書きエラー対策)
 local NameTags, Targets, FontOption, Color, Scale, Background, Health, Distance
 local Equipment, RankDisplay, DisplayDevice, DisplayResource, DisplayName
 local Teammates, DrawingToggle, DistanceCheck, DistanceLimit
 
--- 安全アクセス (万一おかしな値が入っても落ちない)
 local function getScale()
 	return (Scale and typeof(Scale.Value) == 'number' and Scale.Value) or 1
 end
@@ -5058,6 +5056,7 @@ end
 -- =========================================================
 -- [7] ランク / デバイス ヘルパー (RankDisplay / DisplayDevice)
 -- =========================================================
+-- ランクアイコン (名前左側)
 local function updateRankIcon(ent, nametag)
 	if not RankDisplay.Enabled or not ent.Player then return end
 	local icon = nametag:FindFirstChild('RankDisplayIcon')
@@ -5083,25 +5082,28 @@ local function removeRankIcon(nametag)
 	if icon then icon:Destroy() end
 end
 
+-- ★修正: デバイス絵文字ラベル (ランクアイコンの左隣に並べる)
 local function updateDeviceLabel(ent, nametag)
 	if not DisplayDevice.Enabled or not ent.Player then return end
 	local label = nametag:FindFirstChild('DeviceLabel')
 	if not label then
 		label = Instance.new('TextLabel')
 		label.Name = 'DeviceLabel'
-		label.Size = UDim2.fromOffset(80, 14)
-		label.Position = UDim2.new(0.5, 0, 1, 2)
-		label.AnchorPoint = Vector2.new(0.5, 0)
+		label.Size = UDim2.fromOffset(20, 20)
 		label.BackgroundTransparency = 1
 		label.TextXAlignment = Enum.TextXAlignment.Center
-		label.TextSize = 12
+		label.TextYAlignment = Enum.TextYAlignment.Center
+		label.TextSize = 14
 		label.Font = Enum.Font.GothamBold
 		label.TextStrokeTransparency = 0.5
+		label.TextColor3 = Color3.fromRGB(255, 255, 255)
 		label.Parent = nametag
 	end
+	-- ランク表示オンならランクの左隣、オフなら詰める
+	local rankOn = RankDisplay and RankDisplay.Enabled or false
+	label.Position = UDim2.new(0, rankOn and -48 or -26, 0.5, -10)
 	local device = ent.Player:GetAttribute('UserInputType') or '???'
-	label.Text = device
-	label.TextColor3 = DEVICE_COLORS[device] or Color3.fromRGB(200, 200, 200)
+	label.Text = DEVICE_EMOJI[device] or '❓'
 end
 
 local function removeDeviceLabel(nametag)
@@ -5109,6 +5111,7 @@ local function removeDeviceLabel(nametag)
 	if label then label:Destroy() end
 end
 
+-- ランクテキスト (Drawingモード)
 local function getRankText(ent)
 	if not RankDisplay.Enabled or not ent.Player then return '' end
 	local player = ent.Player
@@ -5126,6 +5129,7 @@ local function getRankText(ent)
 	return meta and (' {' .. tostring(meta.name or rank) .. '}') or ''
 end
 
+-- デバイステキスト (Drawingモード / Drawingは絵文字非対応なのでテキストのまま)
 local function getDeviceText(ent)
 	if not DisplayDevice.Enabled or not ent.Player then return '' end
 	return ' [' .. (ent.Player:GetAttribute('UserInputType') or '???') .. ']'
@@ -5399,7 +5403,7 @@ RankDisplay = NameTags:CreateToggle({
 })
 DisplayDevice = NameTags:CreateToggle({
 	Name = 'Display Device',
-	Tooltip = 'Shows the player device (PC / Mobile / Console)',
+	Tooltip = 'Shows the player device as an emoji (💻/📱/)',
 	Function = function() if NameTags.Enabled then NameTags:Toggle(); NameTags:Toggle() end end
 })
 DisplayResource = NameTags:CreateToggle({
