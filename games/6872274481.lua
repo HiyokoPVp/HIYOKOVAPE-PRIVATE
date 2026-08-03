@@ -14972,39 +14972,44 @@ run(function()
 end)
 
 run(function()
-	local KBBoost
+	local KnockBackBoost
 	local BoostSpeed
 	local Duration
-	local old
+	local TargetCheck
 	local isBoosting = false
 	local boostEndTime = 0
+	local old
 
-	KBBoost = vape.Categories.Combat:CreateModule({
-		Name = 'KBBoost',
+	KnockBackBoost = vape.Categories.Rage:CreateModule({
+		Name = 'KnockBackBoost',
 		Function = function(callback)
-			frictionTable.KBBoost = callback or nil
+			frictionTable.KnockBackBoost = callback or nil
 			updateVelocity()
 			if callback then
-				-- ノックバックをフック（Velocityと同じ形式）
 				old = bedwars.KnockbackUtil.applyKnockback
 				bedwars.KnockbackUtil.applyKnockback = function(root, mass, dir, knockback, ...)
-					-- 自分がノックバックを受けたらブースト開始
-					if root and entitylib.isAlive and (root == entitylib.character.RootPart or root.Parent == lplr.Character) then
-						isBoosting = true
-						boostEndTime = tick() + Duration.Value
+					if root and lplr.Character and root:IsDescendantOf(lplr.Character) then
+						-- Only when targeting が有効なら35スタッド以内にプレイヤーがいるかチェック
+						local check = (not TargetCheck.Enabled) or entitylib.EntityPosition({
+							Range = 35,
+							Part = 'RootPart',
+							Players = true
+						})
+						if check then
+							isBoosting = true
+							boostEndTime = tick() + Duration.Value
+						end
 					end
 					return old(root, mass, dir, knockback, ...)
 				end
 
-				-- Speedと同じ形式で速度を上書き
-				KBBoost:Clean(runService.PreSimulation:Connect(function(dt)
+				KnockBackBoost:Clean(runService.PreSimulation:Connect(function(dt)
 					if not isBoosting then return end
 					if not entitylib.isAlive or tick() >= boostEndTime then
 						isBoosting = false
 						return
 					end
 					if not isnetworkowner(entitylib.character.RootPart) then return end
-
 					local root = entitylib.character.RootPart
 					local velo = getSpeed()
 					local moveDirection = entitylib.character.Humanoid.MoveDirection
@@ -15025,8 +15030,7 @@ run(function()
 		Tooltip = 'Boosts your movement speed when you take knockback.'
 	})
 
-	-- どのくらいのスピードにするか
-	BoostSpeed = KBBoost:CreateSlider({
+	BoostSpeed = KnockBackBoost:CreateSlider({
 		Name = 'Speed',
 		Min = 1,
 		Max = 50,
@@ -15036,14 +15040,18 @@ run(function()
 		end
 	})
 
-	-- なん秒間あげるか
-	Duration = KBBoost:CreateSlider({
+	Duration = KnockBackBoost:CreateSlider({
 		Name = 'Duration',
 		Min = 0.1,
-		Max = 5,
+		Max = 2,
 		Default = 1,
 		Decimal = 100,
 		Suffix = 'seconds'
+	})
+
+	TargetCheck = KnockBackBoost:CreateToggle({
+		Name = 'Only when targeting',
+		Tooltip = 'Only boosts if a player is within 35 studs'
 	})
 end)
 
