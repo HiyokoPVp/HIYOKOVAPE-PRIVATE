@@ -4828,7 +4828,7 @@ local EQUIPMENT_SLOTS = { 'Hand', 'Helmet', 'Chestplate', 'Boots', 'Kit' }
 -- ★修正: デバイスは絵文字で表示 (テキストより見やすい)
 local DEVICE_EMOJI = {
 	PC      = '💻',
-	Mobile  = '📱',
+	MOBILE  = '📱',
 	Console = '🎮',
 }
 
