@@ -4825,7 +4825,6 @@ local RESOURCE_CONFIG = {
 
 local EQUIPMENT_SLOTS = { 'Hand', 'Helmet', 'Chestplate', 'Boots', 'Kit' }
 
--- ★修正: デバイスは絵文字で表示 (テキストより見やすい)
 local DEVICE_EMOJI = {
 	PC      = '💻',
 	MOBILE  = '📱',
@@ -5019,22 +5018,42 @@ local function getResourceDrawingText(ent)
 end
 
 -- =========================================================
--- [6] Kitメタ / Equipment ヘルパー (getKitMeta は残す)
+-- [6] Kitメタ / Equipment ヘルパー
 -- =========================================================
 local function getKitMeta(player)
 	local kit = player:GetAttribute('PlayingAsKits') or player:GetAttribute('PlayingAsKit') or 'none'
 	return bedwars.BedwarsKitMeta[kit] or bedwars.BedwarsKitMeta.none, kit
 end
 
+-- ★修正: 最新インベントリを強制取得して store に反映 (死亡/購入時の取りこぼし対策)
+local function refreshPlayerInventory(plr)
+	local inv = bedwars.getInventory(plr)
+	if inv then
+		store.inventories[plr] = inv
+	end
+	return store.inventories[plr]
+end
+
+-- ★修正: 装備変化検出用の署名 (hand + armor)
+local function inventorySignature(inv)
+	if not inv then return '' end
+	local armor = inv.armor or {}
+	local function id(item) return item and item.itemType or '' end
+	return id(inv.hand) .. '|' .. id(armor[4]) .. '|' .. id(armor[5]) .. '|' .. id(armor[6])
+end
+
+-- ★修正: nilガード強化 (アイコン未生成 / armor欠損でも落ちない)
 local function updateEquipmentIcons(ent, nametag)
 	if not Equipment.Enabled or not ent.Player then return end
+	if not nametag:FindFirstChild('Hand') then return end
 	local _, kit = getKitMeta(ent.Player)
 	local inventory = store.inventories[ent.Player]
 	if not inventory then return end
+	local armor = inventory.armor or {}
 	nametag.Hand.Image = bedwars.getIcon(inventory.hand or { itemType = '' }, true)
-	nametag.Helmet.Image = bedwars.getIcon(inventory.armor[4] or { itemType = '' }, true)
-	nametag.Chestplate.Image = bedwars.getIcon(inventory.armor[5] or { itemType = '' }, true)
-	nametag.Boots.Image = bedwars.getIcon(inventory.armor[6] or { itemType = '' }, true)
+	nametag.Helmet.Image = bedwars.getIcon(armor[4] or { itemType = '' }, true)
+	nametag.Chestplate.Image = bedwars.getIcon(armor[5] or { itemType = '' }, true)
+	nametag.Boots.Image = bedwars.getIcon(armor[6] or { itemType = '' }, true)
 	nametag.Kit.Image = kit and kit ~= 'none' and bedwars.BedwarsKitMeta[kit] and bedwars.BedwarsKitMeta[kit].renderImage or ''
 end
 
@@ -5056,7 +5075,6 @@ end
 -- =========================================================
 -- [7] ランク / デバイス ヘルパー (RankDisplay / DisplayDevice)
 -- =========================================================
--- ランクアイコン (名前左側)
 local function updateRankIcon(ent, nametag)
 	if not RankDisplay.Enabled or not ent.Player then return end
 	local icon = nametag:FindFirstChild('RankDisplayIcon')
@@ -5082,7 +5100,6 @@ local function removeRankIcon(nametag)
 	if icon then icon:Destroy() end
 end
 
--- ★修正: デバイス絵文字ラベル (ランクアイコンの左隣に並べる)
 local function updateDeviceLabel(ent, nametag)
 	if not DisplayDevice.Enabled or not ent.Player then return end
 	local label = nametag:FindFirstChild('DeviceLabel')
@@ -5099,7 +5116,6 @@ local function updateDeviceLabel(ent, nametag)
 		label.TextColor3 = Color3.fromRGB(255, 255, 255)
 		label.Parent = nametag
 	end
-	-- ランク表示オンならランクの左隣、オフなら詰める
 	local rankOn = RankDisplay and RankDisplay.Enabled or false
 	label.Position = UDim2.new(0, rankOn and -48 or -26, 0.5, -10)
 	local device = ent.Player:GetAttribute('UserInputType') or '???'
@@ -5111,7 +5127,6 @@ local function removeDeviceLabel(nametag)
 	if label then label:Destroy() end
 end
 
--- ランクテキスト (Drawingモード)
 local function getRankText(ent)
 	if not RankDisplay.Enabled or not ent.Player then return '' end
 	local player = ent.Player
@@ -5129,7 +5144,6 @@ local function getRankText(ent)
 	return meta and (' {' .. tostring(meta.name or rank) .. '}') or ''
 end
 
--- デバイステキスト (Drawingモード / Drawingは絵文字非対応なのでテキストのまま)
 local function getDeviceText(ent)
 	if not DisplayDevice.Enabled or not ent.Player then return '' end
 	return ' [' .. (ent.Player:GetAttribute('UserInputType') or '???') .. ']'
@@ -5162,6 +5176,8 @@ local Added = {
 				icon.Image = ''
 				icon.Parent = nametag
 			end
+			-- ★修正: 初期描画時も最新インベントリを強制取得
+			refreshPlayerInventory(ent.Player)
 			updateEquipmentIcons(ent, nametag)
 		end
 		nametag.TextSize = 14 * getScale()
@@ -5199,7 +5215,10 @@ local Added = {
 		nametag.Text.ZIndex = 2
 		Strings[ent] = ent.Player and whitelist:tag(ent.Player, true) .. (DisplayName.Enabled and ent.Player.DisplayName or ent.Player.Name) or ent.Character.Name
 		if Health.Enabled then Strings[ent] = Strings[ent] .. ' ' .. math.round(ent.Health) end
-		if Equipment.Enabled then Strings[ent] = Strings[ent] .. getEquipmentText(ent) end
+		if Equipment.Enabled then
+			refreshPlayerInventory(ent.Player)
+			Strings[ent] = Strings[ent] .. getEquipmentText(ent)
+		end
 		Strings[ent] = Strings[ent] .. getRankText(ent)
 		Strings[ent] = Strings[ent] .. getDeviceText(ent)
 		Strings[ent] = Strings[ent] .. getResourceDrawingText(ent)
@@ -5308,6 +5327,19 @@ local Loop = {
 				local dist = entitylib.isAlive and (entitylib.character.RootPart.Position - ent.RootPart.Position).Magnitude or math.huge
 				if dist < DistanceLimit.ValueMin or dist > DistanceLimit.ValueMax then nametag.Visible = false; continue end
 			end
+			-- ★修正: Equipment自動更新 (0.5秒間隔 / 死亡・購入時の取りこぼしを自動修復)
+			if Equipment.Enabled and ent.Player then
+				local now = tick()
+				if not ent.LastEquipUpdate or now - ent.LastEquipUpdate > 0.5 then
+					ent.LastEquipUpdate = now
+					local sig = inventorySignature(refreshPlayerInventory(ent.Player))
+					if sig ~= ent.LastEquipSig then
+						ent.LastEquipSig = sig
+						updateEquipmentIcons(ent, nametag)
+					end
+				end
+			end
+			-- リソース定期更新 (1秒間隔)
 			if DisplayResource.Enabled and ent.Player then
 				local now = tick()
 				if not ent.LastResUpdate or now - ent.LastResUpdate > 1 then
@@ -5336,6 +5368,18 @@ local Loop = {
 			if DistanceCheck.Enabled then
 				local dist = entitylib.isAlive and (entitylib.character.RootPart.Position - ent.RootPart.Position).Magnitude or math.huge
 				if dist < DistanceLimit.ValueMin or dist > DistanceLimit.ValueMax then nametag.Text.Visible = false; nametag.BG.Visible = false; continue end
+			end
+			-- ★修正: Equipment自動更新 (変化時のみ再描画)
+			if Equipment.Enabled and ent.Player then
+				local now = tick()
+				if not ent.LastEquipUpdate or now - ent.LastEquipUpdate > 0.5 then
+					ent.LastEquipUpdate = now
+					local sig = inventorySignature(refreshPlayerInventory(ent.Player))
+					if sig ~= ent.LastEquipSig then
+						ent.LastEquipSig = sig
+						Updated.Drawing(ent)
+					end
+				end
 			end
 			if DisplayResource.Enabled and ent.Player then
 				local now = tick()
@@ -5403,7 +5447,7 @@ RankDisplay = NameTags:CreateToggle({
 })
 DisplayDevice = NameTags:CreateToggle({
 	Name = 'Display Device',
-	Tooltip = 'Shows the player device as an emoji (💻/📱/)',
+	Tooltip = 'Shows the player device as an emoji',
 	Function = function() if NameTags.Enabled then NameTags:Toggle(); NameTags:Toggle() end end
 })
 DisplayResource = NameTags:CreateToggle({
@@ -10886,229 +10930,6 @@ run(function()
 		Name = "Position",
 		List = {'Cloeset Player', 'Mouse'}
 	})
-end)
-
-run(function()
-	local KitRender
-    local activeConnections = {}
-    local kitLabels = {}
-    local updateDebounce = {}
-    local retryThread = nil
-    local playerMonitorThread = nil
-    local processedPlayers = {}
-    local UpdateRate = 0.2
-    KitRender = vape.Categories.Utility:CreateModule({
-        Name = "KitRender(broken dont use)",
-        Function = function(callback)   
-            if callback then
-				repeat task.wait(0.08) until isrbxactive()
-                local function createKitLabel(parent, kitImage)
-                    if kitLabels[parent] then
-                        kitLabels[parent]:Destroy()
-                    end
-                    
-                    local kitLabel = Instance.new("ImageLabel")
-                    kitLabel.Name = "OnyxKitIcon"
-                    kitLabel.Size = UDim2.new(1, 0, 1, 0)
-                    kitLabel.Position = UDim2.new(1.1, 0, 0, 0)
-                    kitLabel.BackgroundTransparency = 1
-                    kitLabel.Image = kitImage
-                    kitLabel.Parent = parent
-                    
-                    kitLabels[parent] = kitLabel
-                    return kitLabel
-                end
-                
-                local function setupKitRender(obj)
-                    if obj.Name == "PlayerRender" and obj.Parent and obj.Parent.Parent and obj.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Parent and obj.Parent.Parent.Parent.Parent.Parent.Name == "MatchDraftTeamCardRow" then
-                        local Rank = obj.Parent:FindFirstChild('3')
-                        if not Rank then return end
-                        
-                        local userId = string.match(obj.Image, "id=(%d+)")
-                        if not userId then return end
-                        
-                        local id = tonumber(userId)
-                        if not id then return end
-                        
-                        local plr = playersService:GetPlayerByUserId(id)
-                        if not plr then return end
-                        
-                        local loopKey = plr.UserId
-                        
-                        processedPlayers[loopKey] = true
-                        
-                        if activeConnections[loopKey] then
-                            activeConnections[loopKey]:Disconnect()
-                            activeConnections[loopKey] = nil
-                        end
-                        
-                        local function updateKit()
-                            if not KitRender.Enabled then return end
-                            if not Rank or not Rank.Parent then
-                                if activeConnections[loopKey] then
-                                    activeConnections[loopKey]:Disconnect()
-                                    activeConnections[loopKey] = nil
-                                end
-                                if kitLabels[Rank] then
-                                    kitLabels[Rank]:Destroy()
-                                    kitLabels[Rank] = nil
-                                end
-                                return
-                            end
-                            
-                            local kitName = plr:GetAttribute("PlayingAsKits")
-                            if not kitName then
-                                kitName = "none"
-                            end
-                            
-                            local render = bedwars.BedwarsKitMeta[kitName] or bedwars.BedwarsKitMeta.none
-                            
-                            if kitLabels[Rank] then
-                                kitLabels[Rank].Image = render.renderImage
-                            else
-                                createKitLabel(Rank, render.renderImage)
-                            end
-                        end
-
-                        local function RefreshKitCheck()
-                            if not KitRender.Enabled then return end
-                            if activeConnections[loopKey] then
-                                activeConnections[loopKey]:Disconnect()
-                                activeConnections[loopKey] = nil
-                            end							
-                            if kitLabels[Rank] then
-                                kitLabels[Rank]:Destroy()
-                                kitLabels[Rank] = nil
-                            end
-                            local kitName = plr:GetAttribute("PlayingAsKits")
-                            if not kitName then
-                                kitName = "none"
-                            end
-                            
-                            local render = bedwars.BedwarsKitMeta[kitName] or bedwars.BedwarsKitMeta.none
-                            
-                            if kitLabels[Rank] then
-                                kitLabels[Rank].Image = render.renderImage
-                            else
-                                createKitLabel(Rank, render.renderImage)
-                            end
-						end
-
-                        task.spawn(function()
-							while KitRender.Enabled do
-								RefreshKitCheck()
-								task.wait(UpdateRate)
-							end
-						end)
-                        
-                        local connection = plr:GetAttributeChangedSignal("PlayingAsKits"):Connect(function()
-                            local currentTick = tick()
-                            
-                            if not updateDebounce[loopKey] or (currentTick - updateDebounce[loopKey]) >= 0.1 then
-                                updateDebounce[loopKey] = currentTick
-                                updateKit()
-                            end
-                        end)
-                        
-                        activeConnections[loopKey] = connection
-                        KitRender:Clean(connection)
-                    end
-                end
-                
-                local function setupSquadsRender()
-                    local teams = lplr.PlayerGui:FindFirstChild("MatchDraftApp")
-                    if not teams then
-                        return false
-                    end
-                    
-                    task.wait(0.05)
-                    
-                    for _, obj in teams:GetDescendants() do
-                        if KitRender.Enabled then
-                            task.spawn(function()
-                                setupKitRender(obj)
-                            end)
-                        end
-                    end
-                    
-                    KitRender:Clean(teams.DescendantAdded:Connect(function(obj)
-                        if KitRender.Enabled then
-                            task.wait(0.01)
-                            setupKitRender(obj)
-                        end
-                    end))
-                    
-                    return true
-                end
-                
-                playerMonitorThread = task.spawn(function()
-                    while KitRender.Enabled do
-                        task.wait(0.5)
-                        
-                        local teams = lplr.PlayerGui:FindFirstChild("MatchDraftApp")
-                        if teams then
-                            for _, obj in teams:GetDescendants() do
-                                if obj.Name == "PlayerRender" and KitRender.Enabled then
-                                    local userId = string.match(obj.Image, "id=(%d+)")
-                                    if userId then
-                                        local id = tonumber(userId)
-                                        if id and not processedPlayers[id] then
-                                            task.spawn(function()
-                                                setupKitRender(obj)
-                                            end)
-                                        end
-                                    end
-                                end
-                            end
-                        end
-                    end
-                end)
-                
-                task.spawn(function()
-                    local success = setupSquadsRender()
-                    
-                    if not success then
-                        retryThread = task.spawn(function()
-                            while KitRender.Enabled do
-                                task.wait(0.5)
-                                if setupSquadsRender() then
-                                    break
-                                end
-                            end
-                        end)
-                    end
-                end)
-            else
-                if retryThread then
-                    task.cancel(retryThread)
-                    retryThread = nil
-                end
-                
-                if playerMonitorThread then
-                    task.cancel(playerMonitorThread)
-                    playerMonitorThread = nil
-                end
-                
-                for key, connection in pairs(activeConnections) do
-                    if connection then
-                        connection:Disconnect()
-                    end
-                    activeConnections[key] = nil
-                end
-                
-                for parent, label in pairs(kitLabels) do
-                    if label then
-                        label:Destroy()
-                    end
-                    kitLabels[parent] = nil
-                end
-                
-                table.clear(updateDebounce)
-                table.clear(processedPlayers)
-            end
-        end,
-        Tooltip = "Shows everyone's kit next to their rank during kit phase (squads ranked!)"
-    })
 end)
 
 
