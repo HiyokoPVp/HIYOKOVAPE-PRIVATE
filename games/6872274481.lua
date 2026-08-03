@@ -4813,107 +4813,6 @@ run(function()
 end)
 	
 run(function()
-	local KitESP
-	local Background
-	local Color = {}
-	local Reference = {}
-	local Folder = Instance.new('Folder')
-	Folder.Parent = vape.gui
-	
-	local ESPKits = {
-		alchemist = {'alchemist_ingedients', 'wild_flower'},
-		beekeeper = {'bee', 'bee'},
-		bigman = {'treeOrb', 'natures_essence_1'},
-		ghost_catcher = {'ghost', 'ghost_orb'},
-		metal_detector = {'hidden-metal', 'iron'},
-		sheep_herder = {'SheepModel', 'purple_hay_bale'},
-		sorcerer = {'alchemy_crystal', 'wild_flower'},
-		star_collector = {'stars', 'crit_star'}
-	}
-	
-	local function Added(v, icon)
-		local billboard = Instance.new('BillboardGui')
-		billboard.Parent = Folder
-		billboard.Name = icon
-		billboard.StudsOffsetWorldSpace = Vector3.new(0, 3, 0)
-		billboard.Size = UDim2.fromOffset(36, 36)
-		billboard.AlwaysOnTop = true
-		billboard.ClipsDescendants = false
-		billboard.Adornee = v
-		local blur = addBlur(billboard)
-		blur.Visible = Background.Enabled
-		local image = Instance.new('ImageLabel')
-		image.Size = UDim2.fromOffset(36, 36)
-		image.Position = UDim2.fromScale(0.5, 0.5)
-		image.AnchorPoint = Vector2.new(0.5, 0.5)
-		image.BackgroundColor3 = Color3.fromHSV(Color.Hue, Color.Sat, Color.Value)
-		image.BackgroundTransparency = 1 - (Background.Enabled and Color.Opacity or 0)
-		image.BorderSizePixel = 0
-		image.Image = bedwars.getIcon({itemType = icon}, true)
-		image.Parent = billboard
-		local uicorner = Instance.new('UICorner')
-		uicorner.CornerRadius = UDim.new(0, 4)
-		uicorner.Parent = image
-		Reference[v] = billboard
-	end
-	
-	local function addKit(tag, icon)
-		KitESP:Clean(collectionService:GetInstanceAddedSignal(tag):Connect(function(v)
-			Added(v.PrimaryPart, icon)
-		end))
-		KitESP:Clean(collectionService:GetInstanceRemovedSignal(tag):Connect(function(v)
-			if Reference[v.PrimaryPart] then
-				Reference[v.PrimaryPart]:Destroy()
-				Reference[v.PrimaryPart] = nil
-			end
-		end))
-		for _, v in collectionService:GetTagged(tag) do
-			Added(v.PrimaryPart, icon)
-		end
-	end
-	
-	KitESP = vape.Categories.Render:CreateModule({
-		Name = 'KitESP',
-		Function = function(callback)
-			if callback then
-				repeat task.wait() until store.equippedKit ~= '' or (not KitESP.Enabled)
-				local kit = KitESP.Enabled and ESPKits[store.equippedKit] or nil
-				if kit then
-					addKit(kit[1], kit[2])
-				end
-			else
-				Folder:ClearAllChildren()
-				table.clear(Reference)
-			end
-		end,
-		Tooltip = 'ESP for certain kit related objects'
-	})
-	Background = KitESP:CreateToggle({
-		Name = 'Background',
-		Function = function(callback)
-			if Color.Object then Color.Object.Visible = callback end
-			for _, v in Reference do
-				v.ImageLabel.BackgroundTransparency = 1 - (callback and Color.Opacity or 0)
-				v.Blur.Visible = callback
-			end
-		end,
-		Default = true
-	})
-	Color = KitESP:CreateColorSlider({
-		Name = 'Background Color',
-		DefaultValue = 0,
-		DefaultOpacity = 0.5,
-		Function = function(hue, sat, val, opacity)
-			for _, v in Reference do
-				v.ImageLabel.BackgroundColor3 = Color3.fromHSV(hue, sat, val)
-				v.ImageLabel.BackgroundTransparency = 1 - opacity
-			end
-		end,
-		Darker = true
-	})
-end)
-	
-run(function()
 -- =========================================================
 -- [1] 設定・定数定義
 -- =========================================================
@@ -4926,7 +4825,6 @@ local RESOURCE_CONFIG = {
 
 local EQUIPMENT_SLOTS = { 'Hand', 'Helmet', 'Chestplate', 'Boots', 'Kit' }
 
--- デバイスごとの文字色 (DisplayDevice)
 local DEVICE_COLORS = {
 	PC      = Color3.fromRGB(130, 200, 130),
 	Mobile  = Color3.fromRGB(255, 190, 80),
@@ -4937,10 +4835,25 @@ local Strings, Sizes, Reference = {}, {}, {}
 local Folder = Instance.new('Folder')
 Folder.Parent = vape.gui
 local methodused
-local refreshNametag -- 単体エンティティの再描画用 ([8] で代入)
+local refreshNametag
 
 -- =========================================================
--- [2] ランク取得 (RankDisplay)
+-- ★修正点: オプションは全て local 化 (UIScale上書きエラー対策)
+-- =========================================================
+local NameTags, Targets, FontOption, Color, Scale, Background, Health, Distance
+local Equipment, RankDisplay, DisplayDevice, DisplayResource, DisplayName
+local Teammates, DrawingToggle, DistanceCheck, DistanceLimit
+
+-- 安全アクセス (万一おかしな値が入っても落ちない)
+local function getScale()
+	return (Scale and typeof(Scale.Value) == 'number' and Scale.Value) or 1
+end
+local function getBackground()
+	return (Background and typeof(Background.Value) == 'number' and Background.Value) or 0.5
+end
+
+-- =========================================================
+-- [2] ランク取得 (RankDisplay) ※pcall保護
 -- =========================================================
 local rankinfo = {
 	Players = playersService,
@@ -4948,9 +4861,15 @@ local rankinfo = {
 	Cache = {},
 }
 
-rankinfo.Remotes = require(rankinfo.ReplicatedStorage.TS.remotes).default
-rankinfo.Client = rankinfo.Remotes.Client
-rankinfo.RankMeta = require(rankinfo.ReplicatedStorage.TS.rank['rank-meta']).RankMeta
+local okRemotes, remotesModule = pcall(function()
+	return require(rankinfo.ReplicatedStorage.TS.remotes).default
+end)
+rankinfo.Client = (okRemotes and remotesModule.Client) or bedwars.Client
+
+local okRankMeta, rankMetaModule = pcall(function()
+	return require(rankinfo.ReplicatedStorage.TS.rank['rank-meta']).RankMeta
+end)
+rankinfo.RankMeta = (okRankMeta and rankMetaModule) or bedwars.RankMeta or {}
 
 function rankinfo:GetRank(player)
 	if not player then return nil end
@@ -4988,7 +4907,6 @@ end
 local function countPlayerResources(plr)
 	local counts = { Iron = 0, Gold = 0, Diamond = 0, Emerald = 0 }
 	if not plr then return counts end
-	-- インベントリ参照
 	local invFolder = replicatedStorage:FindFirstChild('Inventories')
 	if invFolder then
 		local plrFolder = invFolder:FindFirstChild(plr.Name)
@@ -5005,7 +4923,6 @@ local function countPlayerResources(plr)
 			end
 		end
 	end
-	-- チェスト参照
 	for _, chest in collectionService:GetTagged('chest') do
 		if chest:GetAttribute('PlacedByUserId') == plr.UserId then
 			local chestVal = chest:FindFirstChild('ChestFolderValue')
@@ -5104,8 +5021,7 @@ local function getResourceDrawingText(ent)
 end
 
 -- =========================================================
--- [6] Kitメタ / Equipment ヘルパー
---     ※ getKitMeta は Equipment も使用するため残す
+-- [6] Kitメタ / Equipment ヘルパー (getKitMeta は残す)
 -- =========================================================
 local function getKitMeta(player)
 	local kit = player:GetAttribute('PlayingAsKits') or player:GetAttribute('PlayingAsKit') or 'none'
@@ -5142,7 +5058,6 @@ end
 -- =========================================================
 -- [7] ランク / デバイス ヘルパー (RankDisplay / DisplayDevice)
 -- =========================================================
--- ランクアイコン (Normalモード / 名前左側)
 local function updateRankIcon(ent, nametag)
 	if not RankDisplay.Enabled or not ent.Player then return end
 	local icon = nametag:FindFirstChild('RankDisplayIcon')
@@ -5168,7 +5083,6 @@ local function removeRankIcon(nametag)
 	if icon then icon:Destroy() end
 end
 
--- デバイスラベル (Normalモード / 名前下側)
 local function updateDeviceLabel(ent, nametag)
 	if not DisplayDevice.Enabled or not ent.Player then return end
 	local label = nametag:FindFirstChild('DeviceLabel')
@@ -5195,13 +5109,11 @@ local function removeDeviceLabel(nametag)
 	if label then label:Destroy() end
 end
 
--- ランクテキスト (Drawingモード)
 local function getRankText(ent)
 	if not RankDisplay.Enabled or not ent.Player then return '' end
 	local player = ent.Player
 	local rank = rankinfo.Cache[player.UserId]
 	if not rank then
-		-- 初回取得は非同期なので、届き次第再描画する
 		task.spawn(function()
 			rankinfo:GetRank(player)
 			if Reference[ent] then
@@ -5214,14 +5126,13 @@ local function getRankText(ent)
 	return meta and (' {' .. tostring(meta.name or rank) .. '}') or ''
 end
 
--- デバイステキスト (Drawingモード)
 local function getDeviceText(ent)
 	if not DisplayDevice.Enabled or not ent.Player then return '' end
 	return ' [' .. (ent.Player:GetAttribute('UserInputType') or '???') .. ']'
 end
 
 -- =========================================================
--- [8] NameTags コアロジック (Added / Removed / Updated / Loop)
+-- [8] NameTags コアロジック
 -- =========================================================
 local Added = {
 	Normal = function(ent)
@@ -5249,14 +5160,14 @@ local Added = {
 			end
 			updateEquipmentIcons(ent, nametag)
 		end
-		nametag.TextSize = 14 * Scale.Value
+		nametag.TextSize = 14 * getScale()
 		nametag.FontFace = FontOption.Value
 		local size = getfontsize(removeTags(Strings[ent]), nametag.TextSize, nametag.FontFace, Vector2.new(100000, 100000))
 		nametag.Name = ent.Player and ent.Player.Name or ent.Character.Name
 		nametag.Size = UDim2.fromOffset(size.X + 8, size.Y + 7)
 		nametag.AnchorPoint = Vector2.new(0.5, 1)
 		nametag.BackgroundColor3 = Color3.new()
-		nametag.BackgroundTransparency = Background.Value
+		nametag.BackgroundTransparency = getBackground()
 		nametag.BorderSizePixel = 0
 		nametag.Visible = false
 		nametag.Text = Strings[ent]
@@ -5275,11 +5186,11 @@ local Added = {
 		local nametag = {}
 		nametag.BG = Drawing.new('Square')
 		nametag.BG.Filled = true
-		nametag.BG.Transparency = 1 - Background.Value
+		nametag.BG.Transparency = 1 - getBackground()
 		nametag.BG.Color = Color3.new()
 		nametag.BG.ZIndex = 1
 		nametag.Text = Drawing.new('Text')
-		nametag.Text.Size = 15 * Scale.Value
+		nametag.Text.Size = 15 * getScale()
 		nametag.Text.Font = 0
 		nametag.Text.ZIndex = 2
 		Strings[ent] = ent.Player and whitelist:tag(ent.Player, true) .. (DisplayName.Enabled and ent.Player.DisplayName or ent.Player.Name) or ent.Character.Name
@@ -5346,7 +5257,6 @@ local Updated = {
 				if ic then ic:Destroy() end
 			end
 		end
-		-- ランク / デバイス 付加パーツ
 		if RankDisplay.Enabled and ent.Player then updateRankIcon(ent, nametag) else removeRankIcon(nametag) end
 		if DisplayDevice.Enabled and ent.Player then updateDeviceLabel(ent, nametag) else removeDeviceLabel(nametag) end
 		local size = getfontsize(removeTags(Strings[ent]), nametag.TextSize, nametag.FontFace, Vector2.new(100000, 100000))
@@ -5376,7 +5286,6 @@ local Updated = {
 	end,
 }
 
--- 非同期ランク取得完了時の再描画関数
 refreshNametag = function(ent)
 	if Updated[methodused] then
 		Updated[methodused](ent)
@@ -5395,7 +5304,6 @@ local Loop = {
 				local dist = entitylib.isAlive and (entitylib.character.RootPart.Position - ent.RootPart.Position).Magnitude or math.huge
 				if dist < DistanceLimit.ValueMin or dist > DistanceLimit.ValueMax then nametag.Visible = false; continue end
 			end
-			-- リソース定期更新 (1秒間隔)
 			if DisplayResource.Enabled and ent.Player then
 				local now = tick()
 				if not ent.LastResUpdate or now - ent.LastResUpdate > 1 then
@@ -5450,7 +5358,7 @@ local Loop = {
 }
 
 -- =========================================================
--- [9] モジュール定義 & UIトグル
+-- [9] モジュール定義 & UIトグル (localへ代入)
 -- =========================================================
 NameTags = vape.Categories.Render:CreateModule({
 	Name = 'NameTags',
