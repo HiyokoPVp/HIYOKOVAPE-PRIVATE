@@ -4849,6 +4849,14 @@ local function getBackground()
 	return (Background and typeof(Background.Value) == 'number' and Background.Value) or 0.5
 end
 
+-- ★修正: スレッド権限の昇格 (cannot access 'Instance' エラー対策)
+-- vape.gui 配下に触る入口すべてで呼ぶこと
+local function fixThread()
+	if vape.ThreadFix and typeof(setthreadidentity) == 'function' then
+		pcall(setthreadidentity, 8)
+	end
+end
+
 -- =========================================================
 -- [2] ランク取得 (RankDisplay) ※pcall保護
 -- =========================================================
@@ -5025,7 +5033,6 @@ local function getKitMeta(player)
 	return bedwars.BedwarsKitMeta[kit] or bedwars.BedwarsKitMeta.none, kit
 end
 
--- ★修正: 最新インベントリを強制取得して store に反映 (死亡/購入時の取りこぼし対策)
 local function refreshPlayerInventory(plr)
 	local inv = bedwars.getInventory(plr)
 	if inv then
@@ -5034,7 +5041,6 @@ local function refreshPlayerInventory(plr)
 	return store.inventories[plr]
 end
 
--- ★修正: 装備変化検出用の署名 (hand + armor)
 local function inventorySignature(inv)
 	if not inv then return '' end
 	local armor = inv.armor or {}
@@ -5042,7 +5048,6 @@ local function inventorySignature(inv)
 	return id(inv.hand) .. '|' .. id(armor[4]) .. '|' .. id(armor[5]) .. '|' .. id(armor[6])
 end
 
--- ★修正: nilガード強化 (アイコン未生成 / armor欠損でも落ちない)
 local function updateEquipmentIcons(ent, nametag)
 	if not Equipment.Enabled or not ent.Player then return end
 	if not nametag:FindFirstChild('Hand') then return end
@@ -5088,6 +5093,7 @@ local function updateRankIcon(ent, nametag)
 	end
 	local player = ent.Player
 	task.spawn(function()
+		fixThread() -- ★修正: 別スレッドでも権限昇格
 		local image = rankinfo:GetImage(player)
 		if image and icon.Parent then
 			icon.Image = image
@@ -5133,6 +5139,7 @@ local function getRankText(ent)
 	local rank = rankinfo.Cache[player.UserId]
 	if not rank then
 		task.spawn(function()
+			fixThread() -- ★修正
 			rankinfo:GetRank(player)
 			if Reference[ent] then
 				refreshNametag(ent)
@@ -5154,6 +5161,7 @@ end
 -- =========================================================
 local Added = {
 	Normal = function(ent)
+		fixThread() -- ★修正
 		if not Targets.Players.Enabled and ent.Player then return end
 		if not Targets.NPCs.Enabled and ent.NPC then return end
 		if Teammates.Enabled and (not ent.Targetable) and (not ent.Friend) then return end
@@ -5176,7 +5184,6 @@ local Added = {
 				icon.Image = ''
 				icon.Parent = nametag
 			end
-			-- ★修正: 初期描画時も最新インベントリを強制取得
 			refreshPlayerInventory(ent.Player)
 			updateEquipmentIcons(ent, nametag)
 		end
@@ -5200,6 +5207,7 @@ local Added = {
 		updateResourceIcons(ent, nametag, size.X + 8)
 	end,
 	Drawing = function(ent)
+		fixThread() -- ★修正
 		if not Targets.Players.Enabled and ent.Player then return end
 		if not Targets.NPCs.Enabled and ent.NPC then return end
 		if Teammates.Enabled and (not ent.Targetable) and (not ent.Friend) then return end
@@ -5236,10 +5244,12 @@ local Added = {
 
 local Removed = {
 	Normal = function(ent)
+		fixThread() -- ★修正
 		local v = Reference[ent]
 		if v then Reference[ent], Strings[ent], Sizes[ent] = nil, nil, nil; v:Destroy() end
 	end,
 	Drawing = function(ent)
+		fixThread() -- ★修正
 		local v = Reference[ent]
 		if v then
 			Reference[ent], Strings[ent], Sizes[ent] = nil, nil, nil
@@ -5250,6 +5260,7 @@ local Removed = {
 
 local Updated = {
 	Normal = function(ent)
+		fixThread() -- ★修正
 		local nametag = Reference[ent]
 		if not nametag then return end
 		Sizes[ent] = nil
@@ -5288,9 +5299,9 @@ local Updated = {
 		updateResourceIcons(ent, nametag, size.X + 8)
 	end,
 	Drawing = function(ent)
+		fixThread() -- ★修正 (従来の setthreadidentity(8) を共通化)
 		local nametag = Reference[ent]
 		if not nametag then return end
-		if vape.ThreadFix then setthreadidentity(8) end
 		Sizes[ent] = nil
 		Strings[ent] = ent.Player and whitelist:tag(ent.Player, true) .. (DisplayName.Enabled and ent.Player.DisplayName or ent.Player.Name) or ent.Character.Name
 		if Health.Enabled then Strings[ent] = Strings[ent] .. ' ' .. math.round(ent.Health) end
@@ -5316,18 +5327,18 @@ refreshNametag = function(ent)
 end
 
 local ColorFunc = {
-	Normal = function(h, s, v) local c = Color3.fromHSV(h, s, v); for i, v in Reference do v.TextColor3 = entitylib.getEntityColor(i) or c end end,
-	Drawing = function(h, s, v) local c = Color3.fromHSV(h, s, v); for i, v in Reference do v.Text.Color = entitylib.getEntityColor(i) or c end end,
+	Normal = function(h, s, v) fixThread(); local c = Color3.fromHSV(h, s, v); for i, v in Reference do v.TextColor3 = entitylib.getEntityColor(i) or c end end,
+	Drawing = function(h, s, v) fixThread(); local c = Color3.fromHSV(h, s, v); for i, v in Reference do v.Text.Color = entitylib.getEntityColor(i) or c end end,
 }
 
 local Loop = {
 	Normal = function()
+		fixThread() -- ★修正 (RenderSteppedスレッド用)
 		for ent, nametag in Reference do
 			if DistanceCheck.Enabled then
 				local dist = entitylib.isAlive and (entitylib.character.RootPart.Position - ent.RootPart.Position).Magnitude or math.huge
 				if dist < DistanceLimit.ValueMin or dist > DistanceLimit.ValueMax then nametag.Visible = false; continue end
 			end
-			-- ★修正: Equipment自動更新 (0.5秒間隔 / 死亡・購入時の取りこぼしを自動修復)
 			if Equipment.Enabled and ent.Player then
 				local now = tick()
 				if not ent.LastEquipUpdate or now - ent.LastEquipUpdate > 0.5 then
@@ -5339,7 +5350,6 @@ local Loop = {
 					end
 				end
 			end
-			-- リソース定期更新 (1秒間隔)
 			if DisplayResource.Enabled and ent.Player then
 				local now = tick()
 				if not ent.LastResUpdate or now - ent.LastResUpdate > 1 then
@@ -5364,12 +5374,12 @@ local Loop = {
 		end
 	end,
 	Drawing = function()
+		fixThread() -- ★修正
 		for ent, nametag in Reference do
 			if DistanceCheck.Enabled then
 				local dist = entitylib.isAlive and (entitylib.character.RootPart.Position - ent.RootPart.Position).Magnitude or math.huge
 				if dist < DistanceLimit.ValueMin or dist > DistanceLimit.ValueMax then nametag.Text.Visible = false; nametag.BG.Visible = false; continue end
 			end
-			-- ★修正: Equipment自動更新 (変化時のみ再描画)
 			if Equipment.Enabled and ent.Player then
 				local now = tick()
 				if not ent.LastEquipUpdate or now - ent.LastEquipUpdate > 0.5 then
@@ -5411,6 +5421,7 @@ local Loop = {
 NameTags = vape.Categories.Render:CreateModule({
 	Name = 'NameTags',
 	Function = function(callback)
+		fixThread() -- ★修正: 有効化時のスレッド権限昇格
 		if callback then
 			methodused = DrawingToggle.Enabled and 'Drawing' or 'Normal'
 			if Removed[methodused] then NameTags:Clean(entitylib.Events.EntityRemoved:Connect(Removed[methodused])) end
