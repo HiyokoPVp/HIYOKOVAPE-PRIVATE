@@ -16882,3 +16882,57 @@ run(function()
         Tooltip = 'Minimum time between drinks'
     })
 end)
+
+run(function()
+    local AutoLobby
+    local TeleportService = game:GetService("TeleportService")
+    local PLACE_ID = 6872265039
+    local debounce = false -- 連続テレポート防止用
+
+    AutoLobby = vape.Categories.Utility:CreateModule({
+        Name = 'AutoLobby',
+        Function = function(callback)
+            if callback then
+                task.spawn(function()
+                    while AutoLobby.Enabled do
+                        task.wait(1) -- 1秒ごとにチェック
+                        
+                        if debounce then continue end
+
+                        -- 1. マッチ中か確認 (store.matchState: 1 = マッチ中)
+                        if store.matchState == 1 then
+                            
+                            -- 2. プレイヤーのTeamが存在するか確認 (game.Players.LocalPlayer.Team を使用)
+                            local playerTeam = lplr.Team
+                            
+                            -- 3. インベントリが空か確認
+                            local items = store.inventory and store.inventory.inventory and store.inventory.inventory.items
+                            local isEmpty = true
+                            
+                            if items then
+                                if next(items) ~= nil then
+                                    isEmpty = false
+                                end
+                            end
+
+                            -- 条件: マッチ中 かつ チームあり かつ アイテムなし
+                            if playerTeam and isEmpty then
+                                notif('AutoLobby', 'In match with no items. Teleporting to lobby...', 3)
+                                debounce = true
+                                
+                                pcall(function()
+                                    TeleportService:Teleport(PLACE_ID, lplr)
+                                end)
+                                
+                                task.wait(10) -- テレポート後の待機
+                            end
+                        end
+                    end
+                end)
+            else
+                debounce = false
+            end
+        end,
+        Tooltip = 'Teleports to lobby if in a match with a team but empty inventory.'
+    })
+end)
