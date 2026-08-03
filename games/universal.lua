@@ -8883,3 +8883,18 @@ run(function()
         Tooltip = 'Continuously scans for new GUI elements and text changes'
     })
 end)
+
+run(function()
+	local DisableRender
+	DisableRender = vape.Categories.Render:CreateModule({
+		Name = 'DisableRender',
+		Function = function(callback)
+			if callback then
+				game:GetService('RunService'):Set3dRenderingEnabled(false)
+			else
+				game:GetService('RunService'):Set3dRenderingEnabled(true)
+			end
+		end,
+		Tooltip = 'Disables 3D rendering to boost performance'
+	})
+end)
