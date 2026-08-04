@@ -16965,24 +16965,38 @@ run(function()
 	local AutoQueue
 	local GameMode
 	local IsLoop
+	local QueueCurrentlyMatch
 	
 	-- bedwars.QueueMeta から有効なゲームモードを動的に取得する関数
 	local function getAvailableModes()
 		local modes = {}
 		if not bedwars or not bedwars.QueueMeta then 
-			return {'bedwars_test'} -- 取得失敗時のフォールバック
+			return {'bedwars_test'} -- フォールバック
 		end
 		
 		for id, meta in pairs(bedwars.QueueMeta) do
-			-- disabled や voiceChatOnly のモードは除外
 			if type(meta) == 'table' and not meta.disabled and not meta.voiceChatOnly then
 				table.insert(modes, id)
 			end
 		end
 		
-		table.sort(modes) -- リストをソート
+		table.sort(modes)
 		if #modes == 0 then table.insert(modes, 'bedwars_test') end
 		return modes
+	end
+
+	-- 実際にキューに入れるモードを決定する関数
+	local function getTargetQueue()
+		-- QueueCurrentlyMatchがONの場合、現在のmatchStateに基づいたqueueTypeを優先
+		if QueueCurrentlyMatch.Enabled then
+			local currentType = store.queueType
+			-- 'bedwars_test' はロビー待機中のプレースホルダーなので除外
+			if currentType and currentType ~= 'bedwars_test' then
+				return currentType
+			end
+		end
+		-- OFFの場合、または有効なモードが見つからない場合はドロップダウンの値を使用
+		return GameMode.Value
 	end
 
 	local function attemptJoin(targetQueue)
@@ -17014,14 +17028,14 @@ run(function()
 						
 						-- ロビー待機中 (matchState == 0) のみ処理
 						if store.matchState == 0 then
-							-- IsLoopがONなら15秒経過しているかチェック
-							-- OFFでも初回(lastAttempt==0)は実行
+							-- IsLoopがONなら15秒経過チェック、OFFでも初回(lastAttempt==0)は実行
 							if (IsLoop.Enabled and (now - lastAttempt >= 15)) or lastAttempt == 0 then
-								attemptJoin(GameMode.Value)
+								local target = getTargetQueue()
+								attemptJoin(target)
 								lastAttempt = now
 							end
 						else
-							-- マッチ中はタイマーをリセット（次のロビー復帰時に即反応できるよう）
+							-- マッチ中はタイマーリセット（次のロビー復帰時に即反応するため）
 							lastAttempt = now 
 						end
 						
@@ -17029,23 +17043,30 @@ run(function()
 					end
 				end)
 				
-				-- マッチ終了イベントでもトリガー（IsLoopに関わらず終了直後に即座にキューするため）
+				-- マッチ終了イベントでもトリガー（終了直後に即座にキューするため）
 				AutoQueue:Clean(vapeEvents.MatchEndEvent.Event:Connect(function()
 					task.wait(1) -- サーバー遷移待ち
 					if AutoQueue.Enabled then
-						attemptJoin(GameMode.Value)
+						local target = getTargetQueue()
+						attemptJoin(target)
 					end
 				end))
 			end
 		end,
-		Tooltip = 'Automatically queues for selected mode. Loops every 15s if stuck.'
+		Tooltip = 'Automatically queues for selected/current mode. Loops every 15s if stuck.'
 	})
 
 	GameMode = AutoQueue:CreateDropdown({
 		Name = 'Game Mode',
 		List = getAvailableModes(),
 		Default = store.queueType or 'bedwars_test',
-		Tooltip = 'Select the game mode to queue for.'
+		Tooltip = 'Select the game mode to queue for (used when QueueCurrentlyMatch is off).'
+	})
+
+	QueueCurrentlyMatch = AutoQueue:CreateToggle({
+		Name = 'QueueCurrentlyMatch',
+		Default = true,
+		Tooltip = 'Prioritizes queuing for the match you are currently playing/recently finished.'
 	})
 
 	IsLoop = AutoQueue:CreateToggle({
