@@ -17012,7 +17012,7 @@ run(function()
                 AutoBuildUp:Clean(runService.Heartbeat:Connect(function(dt)
                     if not entitylib.isAlive then return end
                     
-                    -- マウスチェック (RequireMouse)
+                    -- マウスチェック
                     if RequireMouse.Enabled and not inputService:IsMouseButtonPressed(0) then return end
                     
                     local blockType, amount = getBuildBlock()
@@ -17021,11 +17021,15 @@ run(function()
                     local root = entitylib.character.RootPart
                     local hipHeight = entitylib.character.HipHeight or 2
                     
-                    -- 1. Scaffold部分: 進行方向の足元にブロックを置く
+                    -- 【修正点1】Scaffold部分: 正確な足元の座標を計算
+                    -- RootPartの中心から HipHeight + 1.5 (ブロック半分) を引いた位置が「足元のブロック座標」
+                    local feetPos = root.Position - Vector3.new(0, hipHeight + 1.5, 0)
                     local moveDir = entitylib.character.Humanoid.MoveDirection
+                    
                     if moveDir.Magnitude > 0 then
-                        local scaffoldPos = root.Position - Vector3.new(0, hipHeight + 1.5, 0) + (moveDir * 3)
-                        local roundedScaffold = bedwars.BlockController:getBlockPosition(scaffoldPos) * 3
+                        -- 進行方向へ3スタッド先へ橋をかける
+                        local scaffoldTarget = feetPos + (moveDir * 3)
+                        local roundedScaffold = bedwars.BlockController:getBlockPosition(scaffoldTarget) * 3
                         
                         if not getPlacedBlock(roundedScaffold) then
                             task.spawn(function()
@@ -17034,20 +17038,20 @@ run(function()
                         end
                     end
                     
-                    -- 2. BuildUp部分: 足元から真上にブロックを積む (Expandの数だけ)
-                    for i = 0, Expand.Value do
-                        -- 現在の位置 + HipHeight + (i * ブロックサイズ3)
-                        local targetPos = root.Position + Vector3.new(0, hipHeight + (i * 3), 0)
-                        local roundedPos = bedwars.BlockController:getBlockPosition(targetPos) * 3
+                    -- 【修正点2】BuildUp部分: 常に「現在の」RootPart直上を再計算
+                    -- キャラクターが動いても、毎フレーム最新の座標から真上を計算するためズレない
+                    for i = 1, Expand.Value do
+                        -- 足元(feetPos)から、i個分(3スタッドずつ)真上にオフセット
+                        local buildTarget = feetPos + Vector3.new(0, i * 3, 0)
+                        local roundedBuild = bedwars.BlockController:getBlockPosition(buildTarget) * 3
                         
-                        -- 既にブロックがあるか確認
-                        if not getPlacedBlock(roundedPos) then
+                        if not getPlacedBlock(roundedBuild) then
                             task.spawn(function()
-                                bedwars.placeBlock(roundedPos, blockType, false)
-                                if i == 0 then playPlaceAnim() end -- 一番下のブロック設置時のみアニメーション
+                                bedwars.placeBlock(roundedBuild, blockType, false)
+                                if i == 1 then playPlaceAnim() end
                             end)
                             
-                            -- 速度制限 (Speedが低いほどウェイトが入る)
+                            -- 速度制限
                             if Speed.Value < 20 then
                                 task.wait(1 / Speed.Value)
                             end
@@ -17056,38 +17060,33 @@ run(function()
                 end))
             end
         end,
-        Tooltip = 'Scaffolds forward while automatically building a pillar upwards.'
+        Tooltip = 'Scaffolds forward while building a pillar directly above your head.'
     })
     
     Speed = AutoBuildUp:CreateSlider({
         Name = 'Build Speed',
         Min = 1, Max = 20, Default = 12,
-        Suffix = function(val) return val == 1 and 'bps' or 'bps' end,
-        Tooltip = 'Blocks placed per second. Lower = safer for AC.'
+        Suffix = function(val) return val == 1 and 'bps' or 'bps' end
     })
     
     Expand = AutoBuildUp:CreateSlider({
-        Name = 'Upward Expand',
+        Name = 'Upward Height',
         Min = 1, Max = 10, Default = 3,
-        Suffix = function(val) return val == 1 and 'block' or 'blocks' end,
-        Tooltip = 'How many blocks to stack upwards from your head.'
+        Suffix = function(val) return val == 1 and 'block' or 'blocks' end
     })
     
     LimitItem = AutoBuildUp:CreateToggle({
         Name = 'Limit to Items',
-        Default = false,
-        Tooltip = 'Only uses blocks currently held in hand.'
+        Default = false
     })
     
     RequireMouse = AutoBuildUp:CreateToggle({
         Name = 'Require Mouse Down',
-        Default = true,
-        Tooltip = 'Only builds while holding left mouse button.'
+        Default = true
     })
     
     Animation = AutoBuildUp:CreateToggle({
         Name = 'Play Animation',
-        Default = false,
-        Tooltip = 'Plays the block placement animation for legit visuals.'
+        Default = false
     })
 end)
