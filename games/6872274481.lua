@@ -16969,12 +16969,12 @@ end)
 run(function()
     local AutoBuildUp
     local Speed
+    local Expand
     local LimitItem
     local RequireMouse
     local Animation
-    local Expand
     
-    -- Scaffoldと同様のブロック取得ロジック
+    -- 既存のScaffoldと同じブロック取得ロジック
     local function getBuildBlock()
         if store.hand.toolType == 'block' then
             return store.hand.tool.Name, store.hand.amount
@@ -16992,7 +16992,7 @@ run(function()
         return nil, 0
     end
     
-    -- アニメーション再生ヘルパー
+    -- アニメーション再生
     local function playPlaceAnim()
         if not Animation.Enabled or not entitylib.isAlive then return end
         pcall(function()
@@ -17012,7 +17012,7 @@ run(function()
                 AutoBuildUp:Clean(runService.Heartbeat:Connect(function(dt)
                     if not entitylib.isAlive then return end
                     
-                    -- マウスチェック
+                    -- マウスチェック (RequireMouse)
                     if RequireMouse.Enabled and not inputService:IsMouseButtonPressed(0) then return end
                     
                     local blockType, amount = getBuildBlock()
@@ -17021,21 +17021,33 @@ run(function()
                     local root = entitylib.character.RootPart
                     local hipHeight = entitylib.character.HipHeight or 2
                     
-                    -- 足元から上に向かってExpand分だけブロックを設置
-                    for i = 1, Expand.Value do
+                    -- 1. Scaffold部分: 進行方向の足元にブロックを置く
+                    local moveDir = entitylib.character.Humanoid.MoveDirection
+                    if moveDir.Magnitude > 0 then
+                        local scaffoldPos = root.Position - Vector3.new(0, hipHeight + 1.5, 0) + (moveDir * 3)
+                        local roundedScaffold = bedwars.BlockController:getBlockPosition(scaffoldPos) * 3
+                        
+                        if not getPlacedBlock(roundedScaffold) then
+                            task.spawn(function()
+                                bedwars.placeBlock(roundedScaffold, blockType, false)
+                            end)
+                        end
+                    end
+                    
+                    -- 2. BuildUp部分: 足元から真上にブロックを積む (Expandの数だけ)
+                    for i = 0, Expand.Value do
                         -- 現在の位置 + HipHeight + (i * ブロックサイズ3)
                         local targetPos = root.Position + Vector3.new(0, hipHeight + (i * 3), 0)
                         local roundedPos = bedwars.BlockController:getBlockPosition(targetPos) * 3
                         
                         -- 既にブロックがあるか確認
                         if not getPlacedBlock(roundedPos) then
-                            -- ブロック設置
                             task.spawn(function()
                                 bedwars.placeBlock(roundedPos, blockType, false)
-                                playPlaceAnim()
+                                if i == 0 then playPlaceAnim() end -- 一番下のブロック設置時のみアニメーション
                             end)
                             
-                            -- 速度制限 (Speedが低いほど待機時間が長い)
+                            -- 速度制限 (Speedが低いほどウェイトが入る)
                             if Speed.Value < 20 then
                                 task.wait(1 / Speed.Value)
                             end
@@ -17044,21 +17056,21 @@ run(function()
                 end))
             end
         end,
-        Tooltip = 'Automatically builds a pillar upwards from your feet.'
+        Tooltip = 'Scaffolds forward while automatically building a pillar upwards.'
     })
     
     Speed = AutoBuildUp:CreateSlider({
         Name = 'Build Speed',
-        Min = 1, Max = 20, Default = 8,
+        Min = 1, Max = 20, Default = 12,
         Suffix = function(val) return val == 1 and 'bps' or 'bps' end,
         Tooltip = 'Blocks placed per second. Lower = safer for AC.'
     })
     
     Expand = AutoBuildUp:CreateSlider({
-        Name = 'Height / Expand',
+        Name = 'Upward Expand',
         Min = 1, Max = 10, Default = 3,
         Suffix = function(val) return val == 1 and 'block' or 'blocks' end,
-        Tooltip = 'How many blocks to place upwards per tick.'
+        Tooltip = 'How many blocks to stack upwards from your head.'
     })
     
     LimitItem = AutoBuildUp:CreateToggle({
