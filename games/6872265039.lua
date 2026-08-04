@@ -144,3 +144,74 @@ else
 		end
 	})
 end)
+
+run(function()
+	local AutoQueue
+	local SelectedQueue
+	local IsLoop
+	local QueueList = {}
+
+	-- QueueMetaから有効なキュー一覧を取得
+	local function updateQueueList()
+		table.clear(QueueList)
+		if not bedwars or not bedwars.QueueMeta then return end
+		for id, meta in pairs(bedwars.QueueMeta) do
+			if not meta.disabled and not meta.voiceChatOnly then
+				table.insert(QueueList, id)
+			end
+		end
+		if SelectedQueue and SelectedQueue.Object then
+			SelectedQueue:SetList(QueueList)
+		end
+	end
+
+	AutoQueue = vape.Categories.Utility:CreateModule({
+		Name = 'AutoPlay',
+		Function = function(callback)
+			if callback then
+				updateQueueList()
+				task.spawn(function()
+					while AutoQueue.Enabled do
+						local queueId = SelectedQueue.Value
+						-- 選択IDが無効ならフォールバック
+						if not queueId or not bedwars.QueueMeta[queueId] then
+							queueId = QueueList[1]
+						end
+						
+						-- キュー実行
+						if queueId then
+							pcall(function()
+								bedwars.QueueController:joinQueue(queueId)
+							end)
+						end
+
+						-- ★ IsLoopがONの場合のみ10秒待機してループ継続
+						-- OFFの場合は1回実行後に即座にループを抜ける
+						if IsLoop.Enabled then
+							task.wait(10)
+						else
+							break
+						end
+					end
+				end)
+			end
+		end,
+		Tooltip = 'Automatically joins selected queue. Loop every 10s if enabled.'
+	})
+
+	updateQueueList()
+	local defaultQueue = store.queueType or QueueList[1] or ''
+
+	SelectedQueue = AutoQueue:CreateDropdown({
+		Name = 'Queue Type',
+		List = QueueList,
+		Default = defaultQueue,
+		Tooltip = 'Select which mode to queue for.'
+	})
+
+	IsLoop = AutoQueue:CreateToggle({
+		Name = 'Is Loop',
+		Default = true,
+		Tooltip = 'If enabled, queues every 10 seconds. If disabled, queues only once.'
+	})
+end)
