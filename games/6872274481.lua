@@ -16967,156 +16967,134 @@ run(function()
 end)
 
 run(function()
-    local BlinkReach
-    local Range
-    local ReturnDelay
-    local OnlySword
-    local Visualize
+    local FakeLag
+    local Mode
+    local DelayAmount
+    local FreezeOnStop
+    local Visualizer
     
-    -- 内部変数
-    local originalCFrame = nil
-    local isBlinking = false
-    local lastAttack = 0
-    local boxAdornment = nil
+    -- 内部状態
+    local originalVelocity = Vector3.zero
+    local lastUpdate = 0
+    local isFrozen = false
+    local cachedCFrame = nil
     
-    -- 攻撃パケット送信関数（既存のKillaura/SilentAuraのロジックを流用）
-    local function sendAttackPacket(ent, sword)
-        if not ent or not ent.RootPart or not sword then return end
+    -- ネットワーク更新を操作するためのフック
+    local function manipulatePhysics(dt)
+        if not entitylib.isAlive or not isnetworkowner(entitylib.character.RootPart) then return end
         
-        local selfPos = entitylib.character.RootPart.Position
-        local targetPos = ent.RootPart.Position
-        local dir = CFrame.lookAt(selfPos, targetPos).LookVector
+        local root = entitylib.character.RootPart
+        local now = tick()
         
-        -- Bedwarsの攻撃検証をパスするための位置調整
-        local fakeReach = math.min(14.399, Range.Value)
-        local validatePos = selfPos + dir * math.max((selfPos - targetPos).Magnitude - fakeReach, 0)
-        
-        bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
-        store.attackReach = (Range.Value * 100) // 1 / 100
-        store.attackReachUpdate = tick() + 1
-        
-        bedwars.Client:Get(remotes.AttackEntity):SendToServer({
-            weapon = sword.tool,
-            chargedAttack = {chargeRatio = 0},
-            entityInstance = ent.Character,
-            validate = {
-                raycast = {
-                    cameraPosition = {value = validatePos},
-                    cursorDirection = {value = dir}
-                },
-                targetPosition = {value = targetPos},
-                selfPosition = {value = validatePos}
-            }
-        })
+        if Mode.Value == 'Switch' then
+            -- 指定時間ごとに移動と停止を繰り返す（パケット送信の間引き）
+            if (now - lastUpdate) >= DelayAmount.Value then
+                isFrozen = not isFrozen
+                lastUpdate = now
+                
+                if isFrozen then
+                    -- 停止フェーズ: 速度を殺してサーバー更新を抑制
+                    cachedCFrame = root.CFrame
+                    root.AssemblyLinearVelocity = Vector3.zero
+                    root.AssemblyAngularVelocity = Vector3.zero
+                else
+                    -- 移動フェーズ: 溜め込んだ移動量を瞬間的に反映
+                    if cachedCFrame then
+                        -- キャッシュした位置から現在の入力方向へ補正
+                        local moveDir = entitylib.character.Humanoid.MoveDirection
+                        if moveDir.Magnitude > 0 then
+                            root.CFrame = cachedCFrame + (moveDir * 2) 
+                        end
+                    end
+                end
+            end
+            
+            if isFrozen then
+                -- 停止中は毎フレーム速度をリセット
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+            end
+            
+        elseif Mode.Value == 'Jitter' then
+            -- ランダムな間隔で微小テレポートを繰り返し、補間を破壊する
+            if (now - lastUpdate) >= (DelayAmount.Value * 0.5) then
+                local offset = Vector3.new(
+                    (math.random() - 0.5) * 2,
+                    0,
+                    (math.random() - 0.5) * 2
+                )
+                root.CFrame = root.CFrame + offset
+                lastUpdate = now
+            end
+            
+        elseif Mode.Value == 'Blink' then
+            -- 一定時間完全に静止し、その後一気に移動する
+            if (now - lastUpdate) >= DelayAmount.Value then
+                root.AssemblyLinearVelocity = Vector3.zero
+                lastUpdate = now
+            end
+        end
     end
     
-    BlinkReach = vape.Categories.Blatant:CreateModule({
-        Name = 'BlinkReach',
+    FakeLag = vape.Categories.Blatant:CreateModule({
+        Name = 'FakeLag',
         Function = function(callback)
             if callback then
-                -- 可視化用のボックス作成
-                if Visualize.Enabled then
-                    boxAdornment = Instance.new('BoxHandleAdornment')
-                    boxAdornment.Size = Vector3.new(3, 5, 3)
-                    boxAdornment.CFrame = CFrame.new(0, -0.5, 0)
-                    boxAdornment.AlwaysOnTop = true
-                    boxAdornment.ZIndex = 2
-                    boxAdornment.Color3 = Color3.fromRGB(255, 0, 0)
-                    boxAdornment.Transparency = 0.7
-                    boxAdornment.Parent = vape.gui
-                end
+                FakeLag:Clean(runService.Heartbeat:Connect(maniplatePhysics))
                 
-                BlinkReach:Clean(runService.Heartbeat:Connect(function(dt)
-                    if not entitylib.isAlive or isBlinking then return end
-                    
-                    -- 剣持ちチェック
-                    local sword = OnlySword.Enabled and store.hand or store.tools.sword
-                    if not sword or not sword.tool then return end
-                    if OnlySword.Enabled and store.hand.toolType ~= 'sword' then return end
-                    
-                    -- クールダウンチェック
-                    if tick() - lastAttack < 0.4 then return end
-                    
-                    -- 30スタッド内の最も近い敵を取得
-                    local ent = entitylib.EntityPosition({
-                        Range = Range.Value,
-                        Part = 'RootPart',
-                        Players = true,
-                        NPCs = true,
-                        Wallcheck = false, -- TPなので壁は無視
-                        Sort = sortmethods.Distance
-                    })
-                    
-                    if ent and ent.RootPart then
-                        isBlinking = true
-                        originalCFrame = entitylib.character.RootPart.CFrame
-                        
-                        -- 可視化更新
-                        if boxAdornment then
-                            boxAdornment.Adornee = ent.RootPart
+                -- 視覚化（デバッグ用）
+                if Visualizer.Enabled then
+                    FakeLag:Clean(runService.RenderStepped:Connect(function()
+                        if entitylib.isAlive and isFrozen then
+                            -- 停止中に赤いボックスを表示してラグ状態を可視化
+                            debug.setmetatable(vape.gui, {__index = function(self, k) return rawget(self, k) end})
                         end
-                        
-                        -- 1. 敵の位置へ瞬間移動
-                        local targetCF = CFrame.lookAt(ent.RootPart.Position, originalCFrame.LookVector)
-                        entitylib.character.RootPart.CFrame = targetCF
-                        
-                        -- 2. 攻撃パケット送信
-                        sendAttackPacket(ent, sword)
-                        
-                        -- 3. 設定された遅延後に元の位置へ復帰
-                        task.delay(ReturnDelay.Value, function()
-                            if entitylib.isAlive and originalCFrame then
-                                entitylib.character.RootPart.CFrame = originalCFrame
-                                -- 速度リセットでラグバックを軽減
-                                entitylib.character.RootPart.AssemblyLinearVelocity = Vector3.zero
-                            end
-                            isBlinking = false
-                            originalCFrame = nil
-                            if boxAdornment then
-                                boxAdornment.Adornee = nil
+                    end))
+                end
+            else
+                -- 無効化時の復旧
+                isFrozen = false
+                cachedCFrame = nil
+                if entitylib.isAlive then
+                    local root = entitylib.character.RootPart
+                    root.AssemblyLinearVelocity = originalVelocity
+                    if FreezeOnStop.Enabled then
+                        task.spawn(function()
+                            task.wait(0.1)
+                            if entitylib.isAlive then
+                                entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
                             end
                         end)
-                        
-                        lastAttack = tick()
                     end
-                end))
-            else
-                -- 無効化時のクリーンアップ
-                isBlinking = false
-                if originalCFrame and entitylib.isAlive then
-                    entitylib.character.RootPart.CFrame = originalCFrame
-                end
-                if boxAdornment then
-                    boxAdornment:Destroy()
-                    boxAdornment = nil
                 end
             end
         end,
-        Tooltip = 'Instantly teleports to enemies within 30 studs, attacks, and returns.'
+        Tooltip = 'Simulates network lag to make your hitbox harder to track.'
     })
     
-    Range = BlinkReach:CreateSlider({
-        Name = 'Reach Range',
-        Min = 14, Max = 30, Default = 30,
-        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    Mode = FakeLag:CreateDropdown({
+        Name = 'Mode',
+        List = {'Switch', 'Jitter', 'Blink'},
+        Default = 'Switch',
+        Tooltip = 'Switch: Alternates stop/go\nJitter: Random micro-teleports\nBlink: Periodic full stops'
     })
     
-    ReturnDelay = BlinkReach:CreateSlider({
-        Name = 'Return Delay',
-        Min = 0, Max = 0.5, Default = 0.08, Decimal = 100,
+    DelayAmount = FakeLag:CreateSlider({
+        Name = 'Delay / Interval',
+        Min = 0.05, Max = 1.0, Default = 0.25, Decimal = 100,
         Suffix = 's',
-        Tooltip = 'Time spent at enemy position before returning. Lower = faster but riskier.'
+        Tooltip = 'Time between lag spikes or switch intervals'
     })
     
-    OnlySword = BlinkReach:CreateToggle({
-        Name = 'Only Sword',
+    FreezeOnStop = FakeLag:CreateToggle({
+        Name = 'Auto Recover',
         Default = true,
-        Tooltip = 'Only activates when holding a sword'
+        Tooltip = 'Jumps when disabling to prevent getting stuck in ground'
     })
     
-    Visualize = BlinkReach:CreateToggle({
-        Name = 'Visualize Target',
-        Default = true,
-        Tooltip = 'Shows a red box on the target being blinked to'
+    Visualizer = FakeLag:CreateToggle({
+        Name = 'Visual Feedback',
+        Default = false,
+        Tooltip = 'Shows visual indicator when lag is active'
     })
 end)
