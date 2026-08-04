@@ -16974,15 +16974,13 @@ run(function()
     local RequireMouse
     local Animation
     
-    -- 既存のScaffoldと同じブロック取得ロジック
+    -- Scaffoldと同じブロック取得ロジック
     local function getBuildBlock()
         if store.hand.toolType == 'block' then
             return store.hand.tool.Name, store.hand.amount
         elseif not LimitItem.Enabled then
             local wool, amount = getWool()
-            if wool then
-                return wool, amount
-            end
+            if wool then return wool, amount end
             for _, item in store.inventory.inventory.items do
                 if bedwars.ItemMeta[item.itemType] and bedwars.ItemMeta[item.itemType].block then
                     return item.itemType, item.amount
@@ -16992,16 +16990,11 @@ run(function()
         return nil, 0
     end
     
-    -- アニメーション再生
     local function playPlaceAnim()
         if not Animation.Enabled or not entitylib.isAlive then return end
         pcall(function()
             local anim = bedwars.AnimationUtil:playAnimation(lplr, bedwars.BlockController:getAnimationController():getAssetId(1))
-            if anim then
-                task.delay(0.3, function() 
-                    pcall(function() anim:Stop() anim:Destroy() end) 
-                end)
-            end
+            if anim then task.delay(0.3, function() pcall(function() anim:Stop() anim:Destroy() end) end) end
         end)
     end
 
@@ -17011,24 +17004,22 @@ run(function()
             if callback then
                 AutoBuildUp:Clean(runService.Heartbeat:Connect(function(dt)
                     if not entitylib.isAlive then return end
-                    
-                    -- マウスチェック
                     if RequireMouse.Enabled and not inputService:IsMouseButtonPressed(0) then return end
                     
                     local blockType, amount = getBuildBlock()
                     if not blockType or amount <= 0 then return end
                     
                     local root = entitylib.character.RootPart
-                    local hipHeight = entitylib.character.HipHeight or 2
+                    local humanoid = entitylib.character.Humanoid
                     
-                    -- 【修正点1】Scaffold部分: 正確な足元の座標を計算
-                    -- RootPartの中心から HipHeight + 1.5 (ブロック半分) を引いた位置が「足元のブロック座標」
-                    local feetPos = root.Position - Vector3.new(0, hipHeight + 1.5, 0)
-                    local moveDir = entitylib.character.Humanoid.MoveDirection
+                    -- 【最重要修正】正確な「今立っている床」の座標を算出
+                    -- RootPartは体の中心にあるため、腰の高さ(HipHeight) + 体の半分の高さ(Size.Y/2) を引く
+                    local floorPos = root.Position - Vector3.new(0, humanoid.HipHeight + (root.Size.Y / 2), 0)
                     
+                    -- 1. Scaffold: 進行方向へ橋をかける
+                    local moveDir = humanoid.MoveDirection
                     if moveDir.Magnitude > 0 then
-                        -- 進行方向へ3スタッド先へ橋をかける
-                        local scaffoldTarget = feetPos + (moveDir * 3)
+                        local scaffoldTarget = floorPos + (moveDir * 3)
                         local roundedScaffold = bedwars.BlockController:getBlockPosition(scaffoldTarget) * 3
                         
                         if not getPlacedBlock(roundedScaffold) then
@@ -17038,17 +17029,16 @@ run(function()
                         end
                     end
                     
-                    -- 【修正点2】BuildUp部分: 常に「現在の」RootPart直上を再計算
-                    -- キャラクターが動いても、毎フレーム最新の座標から真上を計算するためズレない
-                    for i = 1, Expand.Value do
-                        -- 足元(feetPos)から、i個分(3スタッドずつ)真上にオフセット
-                        local buildTarget = feetPos + Vector3.new(0, i * 3, 0)
+                    -- 2. Tower: 足元から真上に積む (Expandの数だけ)
+                    -- i=0 は「今立っている場所」、i=1以上は「その上」
+                    for i = 0, Expand.Value do
+                        local buildTarget = floorPos + Vector3.new(0, i * 3, 0)
                         local roundedBuild = bedwars.BlockController:getBlockPosition(buildTarget) * 3
                         
                         if not getPlacedBlock(roundedBuild) then
                             task.spawn(function()
                                 bedwars.placeBlock(roundedBuild, blockType, false)
-                                if i == 1 then playPlaceAnim() end
+                                if i == 0 then playPlaceAnim() end
                             end)
                             
                             -- 速度制限
@@ -17057,10 +17047,16 @@ run(function()
                             end
                         end
                     end
+                    
+                    -- 3. 自動ジャンプ (Tower上昇用)
+                    -- 足元にブロックが置かれたら即座にジャンプして次のブロックへ
+                    if Expand.Value > 0 then
+                        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                    end
                 end))
             end
         end,
-        Tooltip = 'Scaffolds forward while building a pillar directly above your head.'
+        Tooltip = 'Scaffolds forward while building a pillar directly under your feet.'
     })
     
     Speed = AutoBuildUp:CreateSlider({
@@ -17071,22 +17067,12 @@ run(function()
     
     Expand = AutoBuildUp:CreateSlider({
         Name = 'Upward Height',
-        Min = 1, Max = 10, Default = 3,
-        Suffix = function(val) return val == 1 and 'block' or 'blocks' end
+        Min = 0, Max = 10, Default = 3,
+        Suffix = function(val) return val == 1 and 'block' or 'blocks' end,
+        Tooltip = '0 = Scaffold only. 1+ = Build upwards.'
     })
     
-    LimitItem = AutoBuildUp:CreateToggle({
-        Name = 'Limit to Items',
-        Default = false
-    })
-    
-    RequireMouse = AutoBuildUp:CreateToggle({
-        Name = 'Require Mouse Down',
-        Default = true
-    })
-    
-    Animation = AutoBuildUp:CreateToggle({
-        Name = 'Play Animation',
-        Default = false
-    })
+    LimitItem = AutoBuildUp:CreateToggle({ Name = 'Limit to Items', Default = false })
+    RequireMouse = AutoBuildUp:CreateToggle({ Name = 'Require Mouse Down', Default = true })
+    Animation = AutoBuildUp:CreateToggle({ Name = 'Play Animation', Default = false })
 end)
