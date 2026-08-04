@@ -150,33 +150,32 @@ run(function()
 	local AutoQueue
 	local SelectedQueue
 	local IsLoop
-	local QueueList = {}
-
-	-- QueueMetaから有効なキュー一覧を取得
-	local function updateQueueList()
-		table.clear(QueueList)
-		if not bedwars or not bedwars.QueueMeta then return end
-		for id, meta in pairs(bedwars.QueueMeta) do
-			if not meta.disabled and not meta.voiceChatOnly then
-				table.insert(QueueList, id)
+	
+	-- QueueMetaから有効なキュー一覧を取得（同期的に実行）
+	local function getQueueList()
+		local list = {}
+		if bedwars and bedwars.QueueMeta then
+			for id, meta in pairs(bedwars.QueueMeta) do
+				if not meta.disabled and not meta.voiceChatOnly then
+					table.insert(list, id)
+				end
 			end
 		end
-		if SelectedQueue and SelectedQueue.Object then
-			SelectedQueue:SetList(QueueList)
-		end
+		return list
 	end
 
 	AutoQueue = vape.Categories.Utility:CreateModule({
 		Name = 'AutoPlay',
 		Function = function(callback)
 			if callback then
-				updateQueueList()
 				task.spawn(function()
 					while AutoQueue.Enabled do
 						local queueId = SelectedQueue.Value
+						
 						-- 選択IDが無効ならリストの先頭にフォールバック
-						if not queueId or not bedwars.QueueMeta[queueId] then
-							queueId = QueueList[1]
+						if not queueId or not (bedwars.QueueMeta and bedwars.QueueMeta[queueId]) then
+							local list = getQueueList()
+							queueId = list[1]
 						end
 						
 						-- 無条件でキュー実行
@@ -197,15 +196,16 @@ run(function()
 				end)
 			end
 		end,
-		Tooltip = 'Automatically joins selected queue every 10s (no store dependency).'
+		Tooltip = 'Automatically joins selected queue every 10s.'
 	})
 
-	updateQueueList()
-	local defaultQueue = QueueList[1] or ''
+	-- モジュール作成時に一度だけリストを取得してDropdownを生成
+	local queueList = getQueueList()
+	local defaultQueue = queueList[1] or ''
 
 	SelectedQueue = AutoQueue:CreateDropdown({
 		Name = 'Queue Type',
-		List = QueueList,
+		List = queueList,
 		Default = defaultQueue,
 		Tooltip = 'Select which mode to queue for.'
 	})
