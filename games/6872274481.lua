@@ -16967,146 +16967,156 @@ run(function()
 end)
 
 run(function()
-    local Desync
-    local Mode
-    local OffsetX
-    local OffsetY
-    local OffsetZ
-    local FreezeClient
-    local AutoRecover
+    local BlinkReach
+    local Range
+    local ReturnDelay
+    local OnlySword
+    local Visualize
     
-    -- 内部状態管理
+    -- 内部変数
     local originalCFrame = nil
-    local desyncActive = false
-    local lastSyncTick = 0
+    local isBlinking = false
+    local lastAttack = 0
+    local boxAdornment = nil
     
-    -- サーバーとの接続を操作するためのユーティリティ
-    local function manipulateNetwork(mode)
-        if not entitylib.isAlive then return end
-        local root = entitylib.character.RootPart
+    -- 攻撃パケット送信関数（既存のKillaura/SilentAuraのロジックを流用）
+    local function sendAttackPacket(ent, sword)
+        if not ent or not ent.RootPart or not sword then return end
         
-        if mode == 'Freeze' then
-            -- クライアント側の移動を停止し、サーバー更新をブロックする試み
-            root.AssemblyLinearVelocity = Vector3.zero
-            root.AssemblyAngularVelocity = Vector3.zero
-            if entitylib.character.Humanoid then
-                entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
-            end
-        elseif mode == 'Offset' then
-            -- 指定されたオフセット分だけ瞬間的にテレポート（パケット送信タイミングを狙う）
-            local offset = Vector3.new(OffsetX.Value, OffsetY.Value, OffsetZ.Value)
-            root.CFrame = root.CFrame + offset
-        end
+        local selfPos = entitylib.character.RootPart.Position
+        local targetPos = ent.RootPart.Position
+        local dir = CFrame.lookAt(selfPos, targetPos).LookVector
+        
+        -- Bedwarsの攻撃検証をパスするための位置調整
+        local fakeReach = math.min(14.399, Range.Value)
+        local validatePos = selfPos + dir * math.max((selfPos - targetPos).Magnitude - fakeReach, 0)
+        
+        bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
+        store.attackReach = (Range.Value * 100) // 1 / 100
+        store.attackReachUpdate = tick() + 1
+        
+        bedwars.Client:Get(remotes.AttackEntity):SendToServer({
+            weapon = sword.tool,
+            chargedAttack = {chargeRatio = 0},
+            entityInstance = ent.Character,
+            validate = {
+                raycast = {
+                    cameraPosition = {value = validatePos},
+                    cursorDirection = {value = dir}
+                },
+                targetPosition = {value = targetPos},
+                selfPosition = {value = validatePos}
+            }
+        })
     end
-
-    Desync = vape.Categories.Blatant:CreateModule({
-        Name = 'Desync',
+    
+    BlinkReach = vape.Categories.Blatant:CreateModule({
+        Name = 'BlinkReach',
         Function = function(callback)
             if callback then
-                desyncActive = true
-                
-                -- Heartbeatを使用して物理演算前に介入
-                Desync:Clean(runService.Heartbeat:Connect(function(dt)
-                    if not entitylib.isAlive or not isnetworkowner(entitylib.character.RootPart) then 
-                        desyncActive = false
-                        return 
-                    end
-                    
-                    local root = entitylib.character.RootPart
-                    
-                    if Mode.Value == 'Position Offset' then
-                        -- 毎フレーム微小なオフセットを加算し、サーバー補完を混乱させる
-                        local jitter = Vector3.new(
-                            (math.random() - 0.5) * OffsetX.Value,
-                            (math.random() - 0.5) * OffsetY.Value,
-                            (math.random() - 0.5) * OffsetZ.Value
-                        )
-                        
-                        -- クライアント表示はそのままでネットワークパケットのみを操作するのは
-                        -- Robloxの仕様上難しいため、ここでは物理的な位置を微細に揺らす
-                        root.AssemblyLinearVelocity = root.AssemblyLinearVelocity + jitter
-                        
-                    elseif Mode.Value == 'Network Freeze' then
-                        -- 速度をゼロにし続けることでサーバー側の予測移動を無効化
-                        if tick() - lastSyncTick > 0.1 then
-                            root.AssemblyLinearVelocity = Vector3.zero
-                            lastSyncTick = tick()
-                        end
-                        
-                    elseif Mode.Value == 'Blink' then
-                        -- 一定間隔でテレポート→復帰を繰り返し、ヒットボックスを不安定にする
-                        if not originalCFrame then
-                            originalCFrame = root.CFrame
-                        end
-                        
-                        if (tick() % 0.2) < 0.1 then
-                            root.CFrame = originalCFrame + Vector3.new(OffsetX.Value, 0, OffsetZ.Value)
-                        else
-                            root.CFrame = originalCFrame
-                        end
-                    end
-                end))
-                
-                -- RenderSteppedで視覚的な補正を行う（オプション）
-                if FreezeClient.Enabled then
-                    Desync:Clean(runService.RenderStepped:Connect(function()
-                        if entitylib.isAlive and originalCFrame then
-                            -- カメラやローカル表示を元の位置に留める処理
-                            -- ※完全な分離はExecutorの機能に依存します
-                        end
-                    end))
+                -- 可視化用のボックス作成
+                if Visualize.Enabled then
+                    boxAdornment = Instance.new('BoxHandleAdornment')
+                    boxAdornment.Size = Vector3.new(3, 5, 3)
+                    boxAdornment.CFrame = CFrame.new(0, -0.5, 0)
+                    boxAdornment.AlwaysOnTop = true
+                    boxAdornment.ZIndex = 2
+                    boxAdornment.Color3 = Color3.fromRGB(255, 0, 0)
+                    boxAdornment.Transparency = 0.7
+                    boxAdornment.Parent = vape.gui
                 end
                 
-            else
-                desyncActive = false
-                originalCFrame = nil
-                if entitylib.isAlive then
-                    -- 解除時の復旧
-                    if AutoRecover.Enabled then
-                        task.spawn(function()
-                            task.wait(0.1)
-                            if entitylib.isAlive then
-                                entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                BlinkReach:Clean(runService.Heartbeat:Connect(function(dt)
+                    if not entitylib.isAlive or isBlinking then return end
+                    
+                    -- 剣持ちチェック
+                    local sword = OnlySword.Enabled and store.hand or store.tools.sword
+                    if not sword or not sword.tool then return end
+                    if OnlySword.Enabled and store.hand.toolType ~= 'sword' then return end
+                    
+                    -- クールダウンチェック
+                    if tick() - lastAttack < 0.4 then return end
+                    
+                    -- 30スタッド内の最も近い敵を取得
+                    local ent = entitylib.EntityPosition({
+                        Range = Range.Value,
+                        Part = 'RootPart',
+                        Players = true,
+                        NPCs = true,
+                        Wallcheck = false, -- TPなので壁は無視
+                        Sort = sortmethods.Distance
+                    })
+                    
+                    if ent and ent.RootPart then
+                        isBlinking = true
+                        originalCFrame = entitylib.character.RootPart.CFrame
+                        
+                        -- 可視化更新
+                        if boxAdornment then
+                            boxAdornment.Adornee = ent.RootPart
+                        end
+                        
+                        -- 1. 敵の位置へ瞬間移動
+                        local targetCF = CFrame.lookAt(ent.RootPart.Position, originalCFrame.LookVector)
+                        entitylib.character.RootPart.CFrame = targetCF
+                        
+                        -- 2. 攻撃パケット送信
+                        sendAttackPacket(ent, sword)
+                        
+                        -- 3. 設定された遅延後に元の位置へ復帰
+                        task.delay(ReturnDelay.Value, function()
+                            if entitylib.isAlive and originalCFrame then
+                                entitylib.character.RootPart.CFrame = originalCFrame
+                                -- 速度リセットでラグバックを軽減
+                                entitylib.character.RootPart.AssemblyLinearVelocity = Vector3.zero
+                            end
+                            isBlinking = false
+                            originalCFrame = nil
+                            if boxAdornment then
+                                boxAdornment.Adornee = nil
                             end
                         end)
+                        
+                        lastAttack = tick()
                     end
+                end))
+            else
+                -- 無効化時のクリーンアップ
+                isBlinking = false
+                if originalCFrame and entitylib.isAlive then
+                    entitylib.character.RootPart.CFrame = originalCFrame
+                end
+                if boxAdornment then
+                    boxAdornment:Destroy()
+                    boxAdornment = nil
                 end
             end
         end,
-        Tooltip = 'Creates position desynchronization to evade hits.'
+        Tooltip = 'Instantly teleports to enemies within 30 studs, attacks, and returns.'
     })
     
-    Mode = Desync:CreateDropdown({
-        Name = 'Mode',
-        List = {'Position Offset', 'Network Freeze', 'Blink'},
-        Default = 'Position Offset',
-        Tooltip = 'Offset: Jitters position\nFreeze: Stops network updates\nBlink: Rapid teleportation'
+    Range = BlinkReach:CreateSlider({
+        Name = 'Reach Range',
+        Min = 14, Max = 30, Default = 30,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
     })
     
-    OffsetX = Desync:CreateSlider({
-        Name = 'X Offset / Intensity',
-        Min = 0, Max = 20, Default = 5, Decimal = 10
+    ReturnDelay = BlinkReach:CreateSlider({
+        Name = 'Return Delay',
+        Min = 0, Max = 0.5, Default = 0.08, Decimal = 100,
+        Suffix = 's',
+        Tooltip = 'Time spent at enemy position before returning. Lower = faster but riskier.'
     })
     
-    OffsetY = Desync:CreateSlider({
-        Name = 'Y Offset / Intensity',
-        Min = 0, Max = 20, Default = 0, Decimal = 10
-    })
-    
-    OffsetZ = Desync:CreateSlider({
-        Name = 'Z Offset / Intensity',
-        Min = 0, Max = 20, Default = 5, Decimal = 10
-    })
-    
-    FreezeClient = Desync:CreateToggle({
-        Name = 'Visual Stabilizer',
-        Default = false,
-        Tooltip = 'Attempts to keep your screen stable while desyncing (Requires executor support)'
-    })
-    
-    AutoRecover = Desync:CreateToggle({
-        Name = 'Auto Recover',
+    OnlySword = BlinkReach:CreateToggle({
+        Name = 'Only Sword',
         Default = true,
-        Tooltip = 'Automatically jumps/moves when disabling to prevent getting stuck'
+        Tooltip = 'Only activates when holding a sword'
+    })
+    
+    Visualize = BlinkReach:CreateToggle({
+        Name = 'Visualize Target',
+        Default = true,
+        Tooltip = 'Shows a red box on the target being blinked to'
     })
 end)
