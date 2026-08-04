@@ -16890,7 +16890,7 @@ run(function()
     
     -- 状態管理用変数
     local conditionStartTime = nil
-    local WAIT_TIME = 0
+    local WAIT_TIME = 1
     local isTeleporting = false
 
     AutoLobby = vape.Categories.Utility:CreateModule({
@@ -16934,7 +16934,7 @@ run(function()
                             local elapsed = tick() - conditionStartTime
 
                             if elapsed >= WAIT_TIME then
-                                notif('AutoLobby', 'Spectator & Empty inventory for 10s. Teleporting...', 3)
+                                notif('AutoLobby', 'Spectator & Empty inventory for 1s. Teleporting...', 3)
                                 isTeleporting = true
                                 
                                 pcall(function()
