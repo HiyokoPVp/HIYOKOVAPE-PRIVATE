@@ -16889,9 +16889,9 @@ run(function()
     local PLACE_ID = 6872265039
     
     -- 状態管理用変数
-    local conditionStartTime = nil -- 条件が満たされ始めた時間
-    local WAIT_TIME = 10 -- 待機時間（秒）
-    local isTeleporting = false -- テレポート処理中のフラグ
+    local conditionStartTime = nil
+    local WAIT_TIME = 0
+    local isTeleporting = false
 
     AutoLobby = vape.Categories.Utility:CreateModule({
         Name = 'AutoLobby',
@@ -16899,16 +16899,22 @@ run(function()
             if callback then
                 task.spawn(function()
                     while AutoLobby.Enabled do
-                        task.wait(0.5) -- 0.5秒ごとにチェック（反応速度と負荷のバランス）
+                        task.wait(0.5)
                         
-                        -- テレポート処理中はチェックしない
                         if isTeleporting then continue end
 
-                        -- 1. マッチ中か確認 (store.matchState: 1 = マッチ中)
+                        -- 1. マッチ中か確認
                         local isInMatch = (store.matchState == 1)
                         
-                        -- 2. プレイヤーのTeamが存在するか確認 (game.Players.LocalPlayer.Team を使用)
-                        local hasTeam = (lplr.Team ~= nil)
+                        -- 2. チームが「Spectator」またはそれに類する名前か確認
+                        -- 小文字に変換して比較することで "Spectators", "spectator", "SPEC" などにも対応
+                        local hasTeam = false
+                        if lplr.Team ~= nil then
+                            local teamName = string.lower(lplr.Team.Name)
+                            if string.find(teamName, "spectator") or string.find(teamName, "spec") then
+                                hasTeam = true
+                            end
+                        end
                         
                         -- 3. インベントリが空か確認
                         local items = store.inventory and store.inventory.inventory and store.inventory.inventory.items
@@ -16921,158 +16927,36 @@ run(function()
                         local conditionsMet = (isInMatch and hasTeam and isEmpty)
 
                         if conditionsMet then
-                            -- 条件が満たされている場合
-                            
-                            -- まだ計測開始していなければ、現在時刻を記録
                             if conditionStartTime == nil then
                                 conditionStartTime = tick()
-                                -- notif('AutoLobby', 'Conditions met. Waiting 10s...', 2) -- デバッグ用通知（不要なら削除）
                             end
 
-                            -- 経過時間を計算
                             local elapsed = tick() - conditionStartTime
 
-                            -- 10秒経過していたらテレポート
                             if elapsed >= WAIT_TIME then
-                                notif('AutoLobby', 'Empty inventory for 10s. Teleporting...', 3)
+                                notif('AutoLobby', 'Spectator & Empty inventory for 10s. Teleporting...', 3)
                                 isTeleporting = true
                                 
                                 pcall(function()
                                     TeleportService:Teleport(PLACE_ID, lplr)
                                 end)
                                 
-                                -- テレポート後はループを抜けるか、長時間待機して重複実行を防ぐ
                                 task.wait(20) 
                                 isTeleporting = false
                                 conditionStartTime = nil
                             end
                         else
-                            -- 条件が一つでも満たされなくなった場合（アイテムを持った、マッチが終わった等）
-                            -- カウントをリセット
                             if conditionStartTime ~= nil then
-                                -- notif('AutoLobby', 'Condition broken. Timer reset.', 2) -- デバッグ用通知
                                 conditionStartTime = nil
                             end
                         end
                     end
                 end)
             else
-                -- モジュールが無効化されたらリセット
                 conditionStartTime = nil
                 isTeleporting = false
             end
         end,
-        Tooltip = 'Teleports to lobby if inventory is empty for 10s during a match.'
+        Tooltip = 'Teleports to lobby if in Spectator team with empty inventory for 10s during a match.'
     })
-end)
-
-run(function()
-    local AutoBuildUp
-    local Speed
-    local Expand
-    local LimitItem
-    local RequireMouse
-    local Animation
-    
-    -- Scaffoldと同じブロック取得ロジック
-    local function getBuildBlock()
-        if store.hand.toolType == 'block' then
-            return store.hand.tool.Name, store.hand.amount
-        elseif not LimitItem.Enabled then
-            local wool, amount = getWool()
-            if wool then return wool, amount end
-            for _, item in store.inventory.inventory.items do
-                if bedwars.ItemMeta[item.itemType] and bedwars.ItemMeta[item.itemType].block then
-                    return item.itemType, item.amount
-                end
-            end
-        end
-        return nil, 0
-    end
-    
-    local function playPlaceAnim()
-        if not Animation.Enabled or not entitylib.isAlive then return end
-        pcall(function()
-            local anim = bedwars.AnimationUtil:playAnimation(lplr, bedwars.BlockController:getAnimationController():getAssetId(1))
-            if anim then task.delay(0.3, function() pcall(function() anim:Stop() anim:Destroy() end) end) end
-        end)
-    end
-
-    AutoBuildUp = vape.Categories.World:CreateModule({
-        Name = 'AutoBuildUp',
-        Function = function(callback)
-            if callback then
-                AutoBuildUp:Clean(runService.Heartbeat:Connect(function(dt)
-                    if not entitylib.isAlive then return end
-                    if RequireMouse.Enabled and not inputService:IsMouseButtonPressed(0) then return end
-                    
-                    local blockType, amount = getBuildBlock()
-                    if not blockType or amount <= 0 then return end
-                    
-                    local root = entitylib.character.RootPart
-                    local humanoid = entitylib.character.Humanoid
-                    
-                    -- 【最重要修正】正確な「今立っている床」の座標を算出
-                    -- RootPartは体の中心にあるため、腰の高さ(HipHeight) + 体の半分の高さ(Size.Y/2) を引く
-                    local floorPos = root.Position - Vector3.new(0, humanoid.HipHeight + (root.Size.Y / 2), 0)
-                    
-                    -- 1. Scaffold: 進行方向へ橋をかける
-                    local moveDir = humanoid.MoveDirection
-                    if moveDir.Magnitude > 0 then
-                        local scaffoldTarget = floorPos + (moveDir * 3)
-                        local roundedScaffold = bedwars.BlockController:getBlockPosition(scaffoldTarget) * 3
-                        
-                        if not getPlacedBlock(roundedScaffold) then
-                            task.spawn(function()
-                                bedwars.placeBlock(roundedScaffold, blockType, false)
-                            end)
-                        end
-                    end
-                    
-                    -- 2. Tower: 足元から真上に積む (Expandの数だけ)
-                    -- i=0 は「今立っている場所」、i=1以上は「その上」
-                    for i = 0, Expand.Value do
-                        local buildTarget = floorPos + Vector3.new(0, i * 3, 0)
-                        local roundedBuild = bedwars.BlockController:getBlockPosition(buildTarget) * 3
-                        
-                        if not getPlacedBlock(roundedBuild) then
-                            task.spawn(function()
-                                bedwars.placeBlock(roundedBuild, blockType, false)
-                                if i == 0 then playPlaceAnim() end
-                            end)
-                            
-                            -- 速度制限
-                            if Speed.Value < 20 then
-                                task.wait(1 / Speed.Value)
-                            end
-                        end
-                    end
-                    
-                    -- 3. 自動ジャンプ (Tower上昇用)
-                    -- 足元にブロックが置かれたら即座にジャンプして次のブロックへ
-                    if Expand.Value > 0 then
-                        humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
-                    end
-                end))
-            end
-        end,
-        Tooltip = 'Scaffolds forward while building a pillar directly under your feet.'
-    })
-    
-    Speed = AutoBuildUp:CreateSlider({
-        Name = 'Build Speed',
-        Min = 1, Max = 20, Default = 12,
-        Suffix = function(val) return val == 1 and 'bps' or 'bps' end
-    })
-    
-    Expand = AutoBuildUp:CreateSlider({
-        Name = 'Upward Height',
-        Min = 0, Max = 10, Default = 3,
-        Suffix = function(val) return val == 1 and 'block' or 'blocks' end,
-        Tooltip = '0 = Scaffold only. 1+ = Build upwards.'
-    })
-    
-    LimitItem = AutoBuildUp:CreateToggle({ Name = 'Limit to Items', Default = false })
-    RequireMouse = AutoBuildUp:CreateToggle({ Name = 'Require Mouse Down', Default = true })
-    Animation = AutoBuildUp:CreateToggle({ Name = 'Play Animation', Default = false })
 end)
