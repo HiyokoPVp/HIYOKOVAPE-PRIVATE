@@ -16967,134 +16967,115 @@ run(function()
 end)
 
 run(function()
-    local FakeLag
-    local Mode
-    local DelayAmount
-    local FreezeOnStop
-    local Visualizer
+    local AutoBuildUp
+    local Speed
+    local LimitItem
+    local RequireMouse
+    local Animation
+    local Expand
     
-    -- 内部状態
-    local originalVelocity = Vector3.zero
-    local lastUpdate = 0
-    local isFrozen = false
-    local cachedCFrame = nil
-    
-    -- ネットワーク更新を操作するためのフック
-    local function manipulatePhysics(dt)
-        if not entitylib.isAlive or not isnetworkowner(entitylib.character.RootPart) then return end
-        
-        local root = entitylib.character.RootPart
-        local now = tick()
-        
-        if Mode.Value == 'Switch' then
-            -- 指定時間ごとに移動と停止を繰り返す（パケット送信の間引き）
-            if (now - lastUpdate) >= DelayAmount.Value then
-                isFrozen = not isFrozen
-                lastUpdate = now
-                
-                if isFrozen then
-                    -- 停止フェーズ: 速度を殺してサーバー更新を抑制
-                    cachedCFrame = root.CFrame
-                    root.AssemblyLinearVelocity = Vector3.zero
-                    root.AssemblyAngularVelocity = Vector3.zero
-                else
-                    -- 移動フェーズ: 溜め込んだ移動量を瞬間的に反映
-                    if cachedCFrame then
-                        -- キャッシュした位置から現在の入力方向へ補正
-                        local moveDir = entitylib.character.Humanoid.MoveDirection
-                        if moveDir.Magnitude > 0 then
-                            root.CFrame = cachedCFrame + (moveDir * 2) 
-                        end
-                    end
+    -- Scaffoldと同様のブロック取得ロジック
+    local function getBuildBlock()
+        if store.hand.toolType == 'block' then
+            return store.hand.tool.Name, store.hand.amount
+        elseif not LimitItem.Enabled then
+            local wool, amount = getWool()
+            if wool then
+                return wool, amount
+            end
+            for _, item in store.inventory.inventory.items do
+                if bedwars.ItemMeta[item.itemType] and bedwars.ItemMeta[item.itemType].block then
+                    return item.itemType, item.amount
                 end
-            end
-            
-            if isFrozen then
-                -- 停止中は毎フレーム速度をリセット
-                root.AssemblyLinearVelocity = Vector3.zero
-                root.AssemblyAngularVelocity = Vector3.zero
-            end
-            
-        elseif Mode.Value == 'Jitter' then
-            -- ランダムな間隔で微小テレポートを繰り返し、補間を破壊する
-            if (now - lastUpdate) >= (DelayAmount.Value * 0.5) then
-                local offset = Vector3.new(
-                    (math.random() - 0.5) * 2,
-                    0,
-                    (math.random() - 0.5) * 2
-                )
-                root.CFrame = root.CFrame + offset
-                lastUpdate = now
-            end
-            
-        elseif Mode.Value == 'Blink' then
-            -- 一定時間完全に静止し、その後一気に移動する
-            if (now - lastUpdate) >= DelayAmount.Value then
-                root.AssemblyLinearVelocity = Vector3.zero
-                lastUpdate = now
             end
         end
+        return nil, 0
     end
     
-    FakeLag = vape.Categories.Blatant:CreateModule({
-        Name = 'FakeLag',
+    -- アニメーション再生ヘルパー
+    local function playPlaceAnim()
+        if not Animation.Enabled or not entitylib.isAlive then return end
+        pcall(function()
+            local anim = bedwars.AnimationUtil:playAnimation(lplr, bedwars.BlockController:getAnimationController():getAssetId(1))
+            if anim then
+                task.delay(0.3, function() 
+                    pcall(function() anim:Stop() anim:Destroy() end) 
+                end)
+            end
+        end)
+    end
+
+    AutoBuildUp = vape.Categories.World:CreateModule({
+        Name = 'AutoBuildUp',
         Function = function(callback)
             if callback then
-                FakeLag:Clean(runService.Heartbeat:Connect(maniplatePhysics))
-                
-                -- 視覚化（デバッグ用）
-                if Visualizer.Enabled then
-                    FakeLag:Clean(runService.RenderStepped:Connect(function()
-                        if entitylib.isAlive and isFrozen then
-                            -- 停止中に赤いボックスを表示してラグ状態を可視化
-                            debug.setmetatable(vape.gui, {__index = function(self, k) return rawget(self, k) end})
-                        end
-                    end))
-                end
-            else
-                -- 無効化時の復旧
-                isFrozen = false
-                cachedCFrame = nil
-                if entitylib.isAlive then
+                AutoBuildUp:Clean(runService.Heartbeat:Connect(function(dt)
+                    if not entitylib.isAlive then return end
+                    
+                    -- マウスチェック
+                    if RequireMouse.Enabled and not inputService:IsMouseButtonPressed(0) then return end
+                    
+                    local blockType, amount = getBuildBlock()
+                    if not blockType or amount <= 0 then return end
+                    
                     local root = entitylib.character.RootPart
-                    root.AssemblyLinearVelocity = originalVelocity
-                    if FreezeOnStop.Enabled then
-                        task.spawn(function()
-                            task.wait(0.1)
-                            if entitylib.isAlive then
-                                entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                    local hipHeight = entitylib.character.HipHeight or 2
+                    
+                    -- 足元から上に向かってExpand分だけブロックを設置
+                    for i = 1, Expand.Value do
+                        -- 現在の位置 + HipHeight + (i * ブロックサイズ3)
+                        local targetPos = root.Position + Vector3.new(0, hipHeight + (i * 3), 0)
+                        local roundedPos = bedwars.BlockController:getBlockPosition(targetPos) * 3
+                        
+                        -- 既にブロックがあるか確認
+                        if not getPlacedBlock(roundedPos) then
+                            -- ブロック設置
+                            task.spawn(function()
+                                bedwars.placeBlock(roundedPos, blockType, false)
+                                playPlaceAnim()
+                            end)
+                            
+                            -- 速度制限 (Speedが低いほど待機時間が長い)
+                            if Speed.Value < 20 then
+                                task.wait(1 / Speed.Value)
                             end
-                        end)
+                        end
                     end
-                end
+                end))
             end
         end,
-        Tooltip = 'Simulates network lag to make your hitbox harder to track.'
+        Tooltip = 'Automatically builds a pillar upwards from your feet.'
     })
     
-    Mode = FakeLag:CreateDropdown({
-        Name = 'Mode',
-        List = {'Switch', 'Jitter', 'Blink'},
-        Default = 'Switch',
-        Tooltip = 'Switch: Alternates stop/go\nJitter: Random micro-teleports\nBlink: Periodic full stops'
+    Speed = AutoBuildUp:CreateSlider({
+        Name = 'Build Speed',
+        Min = 1, Max = 20, Default = 8,
+        Suffix = function(val) return val == 1 and 'bps' or 'bps' end,
+        Tooltip = 'Blocks placed per second. Lower = safer for AC.'
     })
     
-    DelayAmount = FakeLag:CreateSlider({
-        Name = 'Delay / Interval',
-        Min = 0.05, Max = 1.0, Default = 0.25, Decimal = 100,
-        Suffix = 's',
-        Tooltip = 'Time between lag spikes or switch intervals'
+    Expand = AutoBuildUp:CreateSlider({
+        Name = 'Height / Expand',
+        Min = 1, Max = 10, Default = 3,
+        Suffix = function(val) return val == 1 and 'block' or 'blocks' end,
+        Tooltip = 'How many blocks to place upwards per tick.'
     })
     
-    FreezeOnStop = FakeLag:CreateToggle({
-        Name = 'Auto Recover',
-        Default = true,
-        Tooltip = 'Jumps when disabling to prevent getting stuck in ground'
-    })
-    
-    Visualizer = FakeLag:CreateToggle({
-        Name = 'Visual Feedback',
+    LimitItem = AutoBuildUp:CreateToggle({
+        Name = 'Limit to Items',
         Default = false,
-        Tooltip = 'Shows visual indicator when lag is active'
+        Tooltip = 'Only uses blocks currently held in hand.'
+    })
+    
+    RequireMouse = AutoBuildUp:CreateToggle({
+        Name = 'Require Mouse Down',
+        Default = true,
+        Tooltip = 'Only builds while holding left mouse button.'
+    })
+    
+    Animation = AutoBuildUp:CreateToggle({
+        Name = 'Play Animation',
+        Default = false,
+        Tooltip = 'Plays the block placement animation for legit visuals.'
     })
 end)
