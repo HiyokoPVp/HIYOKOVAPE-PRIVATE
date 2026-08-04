@@ -174,20 +174,20 @@ run(function()
 				task.spawn(function()
 					while AutoQueue.Enabled do
 						local queueId = SelectedQueue.Value
-						-- 選択IDが無効ならフォールバック
+						-- 選択IDが無効ならリストの先頭にフォールバック
 						if not queueId or not bedwars.QueueMeta[queueId] then
 							queueId = QueueList[1]
 						end
 						
-						-- キュー実行
+						-- 無条件でキュー実行
 						if queueId then
 							pcall(function()
 								bedwars.QueueController:joinQueue(queueId)
 							end)
 						end
 
-						-- ★ IsLoopがONの場合のみ10秒待機してループ継続
-						-- OFFの場合は1回実行後に即座にループを抜ける
+						-- IsLoopがONなら10秒待機してループ継続
+						-- OFFなら1回だけ実行して終了
 						if IsLoop.Enabled then
 							task.wait(10)
 						else
@@ -197,11 +197,11 @@ run(function()
 				end)
 			end
 		end,
-		Tooltip = 'Automatically joins selected queue. Loop every 10s if enabled.'
+		Tooltip = 'Automatically joins selected queue every 10s (no store dependency).'
 	})
 
 	updateQueueList()
-	local defaultQueue = store.queueType or QueueList[1] or ''
+	local defaultQueue = QueueList[1] or ''
 
 	SelectedQueue = AutoQueue:CreateDropdown({
 		Name = 'Queue Type',
