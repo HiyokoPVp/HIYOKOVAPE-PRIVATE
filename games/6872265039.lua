@@ -36,7 +36,8 @@ run(function()
 	bedwars = setmetatable({
 		Client = Client,
 		CrateItemMeta = debug.getupvalue(Flamework.resolveDependency('client/controllers/global/reward-crate/crate-controller@CrateController').onStart, 3),
-		Store = require(lplr.PlayerScripts.TS.ui.store).ClientStore
+		Store = require(lplr.PlayerScripts.TS.ui.store).ClientStore,
+		QueueMeta = require(replicatedStorage.TS.game['queue-meta']).QueueMeta
 	}, {
 		__index = function(self, ind)
 			rawset(self, ind, Knit.Controllers[ind])
