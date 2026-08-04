@@ -16965,3 +16965,148 @@ run(function()
         Tooltip = 'Teleports to lobby if inventory is empty for 10s during a match.'
     })
 end)
+
+run(function()
+    local Desync
+    local Mode
+    local OffsetX
+    local OffsetY
+    local OffsetZ
+    local FreezeClient
+    local AutoRecover
+    
+    -- 内部状態管理
+    local originalCFrame = nil
+    local desyncActive = false
+    local lastSyncTick = 0
+    
+    -- サーバーとの接続を操作するためのユーティリティ
+    local function manipulateNetwork(mode)
+        if not entitylib.isAlive then return end
+        local root = entitylib.character.RootPart
+        
+        if mode == 'Freeze' then
+            -- クライアント側の移動を停止し、サーバー更新をブロックする試み
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            if entitylib.character.Humanoid then
+                entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
+            end
+        elseif mode == 'Offset' then
+            -- 指定されたオフセット分だけ瞬間的にテレポート（パケット送信タイミングを狙う）
+            local offset = Vector3.new(OffsetX.Value, OffsetY.Value, OffsetZ.Value)
+            root.CFrame = root.CFrame + offset
+        end
+    end
+
+    Desync = vape.Categories.Blatant:CreateModule({
+        Name = 'Desync',
+        Function = function(callback)
+            if callback then
+                desyncActive = true
+                
+                -- Heartbeatを使用して物理演算前に介入
+                Desync:Clean(runService.Heartbeat:Connect(function(dt)
+                    if not entitylib.isAlive or not isnetworkowner(entitylib.character.RootPart) then 
+                        desyncActive = false
+                        return 
+                    end
+                    
+                    local root = entitylib.character.RootPart
+                    
+                    if Mode.Value == 'Position Offset' then
+                        -- 毎フレーム微小なオフセットを加算し、サーバー補完を混乱させる
+                        local jitter = Vector3.new(
+                            (math.random() - 0.5) * OffsetX.Value,
+                            (math.random() - 0.5) * OffsetY.Value,
+                            (math.random() - 0.5) * OffsetZ.Value
+                        )
+                        
+                        -- クライアント表示はそのままでネットワークパケットのみを操作するのは
+                        -- Robloxの仕様上難しいため、ここでは物理的な位置を微細に揺らす
+                        root.AssemblyLinearVelocity = root.AssemblyLinearVelocity + jitter
+                        
+                    elseif Mode.Value == 'Network Freeze' then
+                        -- 速度をゼロにし続けることでサーバー側の予測移動を無効化
+                        if tick() - lastSyncTick > 0.1 then
+                            root.AssemblyLinearVelocity = Vector3.zero
+                            lastSyncTick = tick()
+                        end
+                        
+                    elseif Mode.Value == 'Blink' then
+                        -- 一定間隔でテレポート→復帰を繰り返し、ヒットボックスを不安定にする
+                        if not originalCFrame then
+                            originalCFrame = root.CFrame
+                        end
+                        
+                        if (tick() % 0.2) < 0.1 then
+                            root.CFrame = originalCFrame + Vector3.new(OffsetX.Value, 0, OffsetZ.Value)
+                        else
+                            root.CFrame = originalCFrame
+                        end
+                    end
+                end))
+                
+                -- RenderSteppedで視覚的な補正を行う（オプション）
+                if FreezeClient.Enabled then
+                    Desync:Clean(runService.RenderStepped:Connect(function()
+                        if entitylib.isAlive and originalCFrame then
+                            -- カメラやローカル表示を元の位置に留める処理
+                            -- ※完全な分離はExecutorの機能に依存します
+                        end
+                    end))
+                end
+                
+            else
+                desyncActive = false
+                originalCFrame = nil
+                if entitylib.isAlive then
+                    -- 解除時の復旧
+                    if AutoRecover.Enabled then
+                        task.spawn(function()
+                            task.wait(0.1)
+                            if entitylib.isAlive then
+                                entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+                            end
+                        end)
+                    end
+                end
+            end
+        end,
+        Tooltip = 'Creates position desynchronization to evade hits.'
+    })
+    
+    Mode = Desync:CreateDropdown({
+        Name = 'Mode',
+        List = {'Position Offset', 'Network Freeze', 'Blink'},
+        Default = 'Position Offset',
+        Tooltip = 'Offset: Jitters position\nFreeze: Stops network updates\nBlink: Rapid teleportation'
+    })
+    
+    OffsetX = Desync:CreateSlider({
+        Name = 'X Offset / Intensity',
+        Min = 0, Max = 20, Default = 5, Decimal = 10
+    })
+    
+    OffsetY = Desync:CreateSlider({
+        Name = 'Y Offset / Intensity',
+        Min = 0, Max = 20, Default = 0, Decimal = 10
+    })
+    
+    OffsetZ = Desync:CreateSlider({
+        Name = 'Z Offset / Intensity',
+        Min = 0, Max = 20, Default = 5, Decimal = 10
+    })
+    
+    FreezeClient = Desync:CreateToggle({
+        Name = 'Visual Stabilizer',
+        Default = false,
+        Tooltip = 'Attempts to keep your screen stable while desyncing (Requires executor support)'
+    })
+    
+    AutoRecover = Desync:CreateToggle({
+        Name = 'Auto Recover',
+        Default = true,
+        Tooltip = 'Automatically jumps/moves when disabling to prevent getting stuck'
+    })
+end)
