@@ -16887,7 +16887,11 @@ run(function()
     local AutoLobby
     local TeleportService = game:GetService("TeleportService")
     local PLACE_ID = 6872265039
-    local debounce = false -- 連続テレポート防止用
+    
+    -- 状態管理用変数
+    local conditionStartTime = nil -- 条件が満たされ始めた時間
+    local WAIT_TIME = 10 -- 待機時間（秒）
+    local isTeleporting = false -- テレポート処理中のフラグ
 
     AutoLobby = vape.Categories.Utility:CreateModule({
         Name = 'AutoLobby',
@@ -16895,44 +16899,69 @@ run(function()
             if callback then
                 task.spawn(function()
                     while AutoLobby.Enabled do
-                        task.wait(1) -- 1秒ごとにチェック
+                        task.wait(0.5) -- 0.5秒ごとにチェック（反応速度と負荷のバランス）
                         
-                        if debounce then continue end
+                        -- テレポート処理中はチェックしない
+                        if isTeleporting then continue end
 
                         -- 1. マッチ中か確認 (store.matchState: 1 = マッチ中)
-                        if store.matchState == 1 then
+                        local isInMatch = (store.matchState == 1)
+                        
+                        -- 2. プレイヤーのTeamが存在するか確認 (game.Players.LocalPlayer.Team を使用)
+                        local hasTeam = (lplr.Team ~= nil)
+                        
+                        -- 3. インベントリが空か確認
+                        local items = store.inventory and store.inventory.inventory and store.inventory.inventory.items
+                        local isEmpty = true
+                        if items and next(items) ~= nil then
+                            isEmpty = false
+                        end
+
+                        -- 全ての条件を満たしているか
+                        local conditionsMet = (isInMatch and hasTeam and isEmpty)
+
+                        if conditionsMet then
+                            -- 条件が満たされている場合
                             
-                            -- 2. プレイヤーのTeamが存在するか確認 (game.Players.LocalPlayer.Team を使用)
-                            local playerTeam = lplr.Team
-                            
-                            -- 3. インベントリが空か確認
-                            local items = store.inventory and store.inventory.inventory and store.inventory.inventory.items
-                            local isEmpty = true
-                            
-                            if items then
-                                if next(items) ~= nil then
-                                    isEmpty = false
-                                end
+                            -- まだ計測開始していなければ、現在時刻を記録
+                            if conditionStartTime == nil then
+                                conditionStartTime = tick()
+                                -- notif('AutoLobby', 'Conditions met. Waiting 10s...', 2) -- デバッグ用通知（不要なら削除）
                             end
 
-                            -- 条件: マッチ中 かつ チームあり かつ アイテムなし
-                            if playerTeam and isEmpty then
-                                notif('AutoLobby', 'In match with no items. Teleporting to lobby...', 3)
-                                debounce = true
+                            -- 経過時間を計算
+                            local elapsed = tick() - conditionStartTime
+
+                            -- 10秒経過していたらテレポート
+                            if elapsed >= WAIT_TIME then
+                                notif('AutoLobby', 'Empty inventory for 10s. Teleporting...', 3)
+                                isTeleporting = true
                                 
                                 pcall(function()
                                     TeleportService:Teleport(PLACE_ID, lplr)
                                 end)
                                 
-                                task.wait(10) -- テレポート後の待機
+                                -- テレポート後はループを抜けるか、長時間待機して重複実行を防ぐ
+                                task.wait(20) 
+                                isTeleporting = false
+                                conditionStartTime = nil
+                            end
+                        else
+                            -- 条件が一つでも満たされなくなった場合（アイテムを持った、マッチが終わった等）
+                            -- カウントをリセット
+                            if conditionStartTime ~= nil then
+                                -- notif('AutoLobby', 'Condition broken. Timer reset.', 2) -- デバッグ用通知
+                                conditionStartTime = nil
                             end
                         end
                     end
                 end)
             else
-                debounce = false
+                -- モジュールが無効化されたらリセット
+                conditionStartTime = nil
+                isTeleporting = false
             end
         end,
-        Tooltip = 'Teleports to lobby if in a match with a team but empty inventory.'
+        Tooltip = 'Teleports to lobby if inventory is empty for 10s during a match.'
     })
 end)
