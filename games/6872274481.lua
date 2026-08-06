@@ -3963,12 +3963,21 @@ run(function()
         Default = false
     })
 
-    RangeVisualiser = Killaura:CreateToggle({
-        Name = 'Range Visualiser',
-        Function = function()
+RangeVisualiser = Killaura:CreateToggle({
+    Name = 'Range Visualiser',
+    Function = function(callback)
+        if callback then
+            task.spawn(function()
+                repeat
+                    updateVisualiser()
+                    task.wait(0.5)
+                until not RangeVisualiser.Enabled
+            end)
+        else
             updateVisualiser()
         end
-    })
+    end
+})
 
     VisualiserColor = Killaura:CreateColorSlider({
         Name = 'Visualiser Color',
