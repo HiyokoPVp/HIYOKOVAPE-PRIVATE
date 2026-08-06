@@ -3288,59 +3288,112 @@ run(function()
     local IgnorePlayer
     local IgnoredList
     local IgnoreRange
-    local SkywarsCheck -- ★ 新規追加
+    local SkywarsCheck
+    local RangeVisualiser
+    local VisualiserColor
 
     local Particles, Boxes = {}, {}
     local anims, AnimDelay, AnimTween, armC0 = vape.Libraries.auraanims, tick()
     local AttackRemote = {FireServer = function() end}
-
+    
     task.spawn(function()
         AttackRemote = bedwars.Client:Get(remotes.AttackEntity).instance
     end)
 
     -- ============================================================
-    -- SkywarsCheck 用ヘルパー
+    -- Range Visualiser Logic
+    -- ============================================================
+    local visualiserPart = nil
+    local visualiserConnection = nil
+
+    local function updateVisualiser()
+        if Killaura and Killaura.Enabled and RangeVisualiser and RangeVisualiser.Enabled and entitylib.isAlive then
+            if not visualiserPart then
+                visualiserPart = Instance.new("MeshPart")
+                visualiserPart.MeshId = "rbxassetid://3726303797"
+                visualiserPart.Anchored = true
+                visualiserPart.CanCollide = false
+                visualiserPart.CanQuery = false
+                visualiserPart.CanTouch = false
+                visualiserPart.CastShadow = false
+                visualiserPart.Material = Enum.Material.Neon
+                visualiserPart.Parent = gameCamera
+
+                visualiserConnection = runService.RenderStepped:Connect(function()
+                    if not visualiserPart or not visualiserPart.Parent then
+                        if visualiserConnection then visualiserConnection:Disconnect() end
+                        return
+                    end
+                    
+                    local root = entitylib.character and entitylib.character.RootPart
+                    if root then
+                        local yOffset = -(root.Size.Y / 2) + 0.3
+                        local humanoid = entitylib.character.Humanoid
+                        if humanoid then
+                            yOffset = yOffset - humanoid.HipHeight
+                        end
+                        
+                        local col = Color3.new(1, 1, 1)
+                        local trans = 0.5
+                        if VisualiserColor then
+                            col = Color3.fromHSV(VisualiserColor.Hue, VisualiserColor.Sat, VisualiserColor.Value)
+                            trans = 1 - VisualiserColor.Opacity
+                        end
+                        visualiserPart.Color = col
+                        visualiserPart.Transparency = trans
+                        
+                        local range = AttackRange and AttackRange.Value or 14
+                        local size = range * 0.7
+                        visualiserPart.Size = Vector3.new(size, 0.05, size)
+                        
+                        visualiserPart.CFrame = CFrame.new(
+                            root.Position.X,
+                            root.Position.Y + yOffset,
+                            root.Position.Z
+                        )
+                    else
+                        visualiserPart.Transparency = 1
+                    end
+                end)
+            end
+        else
+            if visualiserPart then
+                visualiserPart:Destroy()
+                visualiserPart = nil
+            end
+            if visualiserConnection then
+                visualiserConnection:Disconnect()
+                visualiserConnection = nil
+            end
+        end
+    end
+
+    -- ============================================================
+    -- SkywarsCheck Helper
     -- ============================================================
     local skywarsCheckStartTick = 0
-    local SKYWARS_CHECK_DURATION = 60 -- 1分（秒）
-    local SKYWARS_PLATFORM_RANGE = 30  -- 30スタッド以内
+    local SKYWARS_CHECK_DURATION = 60
+    local SKYWARS_PLATFORM_RANGE = 30
 
     local function isSkywarsCheckActive()
-        -- オプションが無効なら即 false
-        if not SkywarsCheck or not SkywarsCheck.Enabled then
-            return false
-        end
-        -- 1分経過していたら何もしない
-        if tick() - skywarsCheckStartTick >= SKYWARS_CHECK_DURATION then
-            return false
-        end
-        -- 現在のキューが Skywars 系でなければ false
-        if not store.queueType or not store.queueType:find('skywars') then
-            return false
-        end
+        if not SkywarsCheck or not SkywarsCheck.Enabled then return false end
+        if tick() - skywarsCheckStartTick >= SKYWARS_CHECK_DURATION then return false end
+        if not store.queueType or not store.queueType:find('skywars') then return false end
         return true
     end
 
     local function isNearSpectatorPlatform()
-        -- ワークスペースに SpectatorPlatform が存在するか確認
         local platform = workspace:FindFirstChild('SpectatorPlatform')
-        if not platform then
-            return false
-        end
+        if not platform then return false end
         local floor = platform:FindFirstChild('floor')
-        if not floor or not floor:IsA('BasePart') then
-            return false
-        end
-        -- 自分のキャラクターの RootPart との距離を測定
-        if not entitylib.isAlive or not entitylib.character or not entitylib.character.RootPart then
-            return false
-        end
+        if not floor or not floor:IsA('BasePart') then return false end
+        if not entitylib.isAlive or not entitylib.character or not entitylib.character.RootPart then return false end
         local distance = (entitylib.character.RootPart.Position - floor.Position).Magnitude
         return distance <= SKYWARS_PLATFORM_RANGE
     end
 
     -- ============================================================
-    -- 攻撃データ取得
+    -- Attack Data
     -- ============================================================
     local function getAttackData()
         if Mouse.Enabled then
@@ -3366,29 +3419,26 @@ run(function()
     end
 
     -- ============================================================
-    -- Killaura モジュール本体
+    -- Killaura Module Definition
     -- ============================================================
     Killaura = vape.Categories.Blatant:CreateModule({
         Name = 'Killaura',
         Function = function(callback)
             if callback then
-                -- ★ SkywarsCheck のタイマーを開始
                 skywarsCheckStartTick = tick()
-
                 if inputService.TouchEnabled then
                     pcall(function()
                         lplr.PlayerGui.MobileUI['2'].Visible = Limit.Enabled
                     end)
                 end
+                
+                updateVisualiser()
 
-                -- カスタムアニメーション処理
                 if Animation.Enabled and not (identifyexecutor and table.find({'Argon', 'Delta', 'Codex', 'Krampus', 'Solara', 'Xeno'}, ({identifyexecutor()})[1])) then
                     local fake = {
                         Controllers = {
                             ViewmodelController = {
-                                isVisible = function()
-                                    return not Attacking
-                                end,
+                                isVisible = function() return not Attacking end,
                                 playAnimation = function(...)
                                     if not Attacking then
                                         bedwars.ViewmodelController:playAnimation(select(2, ...))
@@ -3401,9 +3451,7 @@ run(function()
                         local started = false
                         repeat
                             if Attacking then
-                                if not armC0 then
-                                    armC0 = gameCamera.Viewmodel.RightHand.RightWrist.C0
-                                end
+                                if not armC0 then armC0 = gameCamera.Viewmodel.RightHand.RightWrist.C0 end
                                 local first = not started
                                 started = true
                                 if AnimationMode.Value == 'Random' then
@@ -3425,55 +3473,37 @@ run(function()
                                 })
                                 AnimTween:Play()
                             end
-                            if not started then
-                                task.wait(1 / UpdateRate.Value)
-                            end
+                            if not started then task.wait(1 / UpdateRate.Value) end
                         until (not Killaura.Enabled) or (not Animation.Enabled)
                     end)
                 end
-
+                
                 local swingCooldown = 0
-
-                -- ============================================================
-                -- メインループ
-                -- ============================================================
                 repeat
-                    -- InMatchCheck: マッチ開始まで待機
                     if InMatchCheck.Enabled then
                         while InMatchCheck.Enabled and Killaura.Enabled and store.matchState ~= 1 do
                             Attacking = false
                             store.KillauraTarget = nil
-                            for _, v in Boxes do
-                                v.Adornee = nil
-                            end
-                            for _, v in Particles do
-                                v.Parent = nil
-                            end
+                            for _, v in Boxes do v.Adornee = nil end
+                            for _, v in Particles do v.Parent = nil end
                             task.wait(0.2)
                         end
-                        if not Killaura.Enabled then
-                            break
-                        end
+                        if not Killaura.Enabled then break end
                     end
-
-                    -- ★ SkywarsCheck: Skywars で SpectatorPlatform.floor の近くなら攻撃しない
+                    
                     if isSkywarsCheckActive() and isNearSpectatorPlatform() then
                         Attacking = false
                         store.KillauraTarget = nil
-                        for _, v in Boxes do
-                            v.Adornee = nil
-                        end
-                        for _, v in Particles do
-                            v.Parent = nil
-                        end
+                        for _, v in Boxes do v.Adornee = nil end
+                        for _, v in Particles do v.Parent = nil end
                         task.wait(1 / UpdateRate.Value)
                         continue
                     end
-
+                    
                     local attacked, sword, meta = {}, getAttackData()
                     Attacking = false
                     store.KillauraTarget = nil
-
+                    
                     if sword then
                         local plrs = entitylib.AllPosition({
                             Range = SwingRange.Value,
@@ -3484,25 +3514,20 @@ run(function()
                             Limit = MaxTargets.Value,
                             Sort = sortmethods[Sort.Value]
                         })
-
+                        
                         if #plrs > 0 then
                             switchItem(sword.tool, 0)
                             local selfpos = entitylib.character.RootPart.Position
                             local localfacing = entitylib.character.RootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
-
+                            
                             for _, v in plrs do
                                 local delta = (v.RootPart.Position - selfpos)
                                 local angle = math.acos(localfacing:Dot((delta * Vector3.new(1, 0, 1)).Unit))
                                 if angle > (math.rad(AngleSlider.Value) / 2) then continue end
-
-                                -- 空中ヒット確率チェック
+                                
                                 local targetHRP = v.Character and v.Character:FindFirstChild('HumanoidRootPart')
                                 if targetHRP then
-                                    local rayResult = workspace:Raycast(
-                                        targetHRP.Position,
-                                        Vector3.new(0, -5, 0),
-                                        RaycastParams.new()
-                                    )
+                                    local rayResult = workspace:Raycast(targetHRP.Position, Vector3.new(0, -5, 0), RaycastParams.new())
                                     local isInAir = rayResult == nil
                                     if isInAir then
                                         local chance = AirhitChance.Value
@@ -3511,26 +3536,23 @@ run(function()
                                         end
                                     end
                                 end
-
-                                -- IgnorePlayer チェック
+                                
                                 local currentAttackRange = AttackRange.Value
                                 if IgnorePlayer and IgnorePlayer.Enabled and v.Player then
                                     local playerName = v.Player.Name
                                     local ignoredNames = IgnoredList and (IgnoredList.ListEnabled or IgnoredList.List) or {}
                                     if table.find(ignoredNames, playerName) then
                                         currentAttackRange = IgnoreRange.Value
-                                        if currentAttackRange <= 0 then
-                                            continue
-                                        end
+                                        if currentAttackRange <= 0 then continue end
                                     end
                                 end
-
+                                
                                 table.insert(attacked, {
                                     Entity = v,
                                     Check = delta.Magnitude > currentAttackRange and BoxSwingColor or BoxAttackColor
                                 })
                                 targetinfo.Targets[v] = tick() + 1
-
+                                
                                 if not Attacking then
                                     Attacking = true
                                     store.KillauraTarget = v
@@ -3540,33 +3562,29 @@ run(function()
                                         if meta.displayName:find(' Scythe') then
                                             bedwars.ScytheController:playLocalAnimation()
                                         end
-                                        if vape.ThreadFix then
-                                            setthreadidentity(8)
-                                        end
+                                        if vape.ThreadFix then setthreadidentity(8) end
                                     end
                                 end
-
+                                
                                 if delta.Magnitude > currentAttackRange then continue end
-
                                 local effectiveCloseRange = math.min(currentAttackRange, 14.4)
                                 if delta.Magnitude < effectiveCloseRange and (tick() - swingCooldown) < math.max(ChargeTime.Value, 0.02) then continue end
-
+                                
                                 local actualRoot = v.Character.PrimaryPart
                                 if actualRoot then
                                     local dir = CFrame.lookAt(selfpos, actualRoot.Position).LookVector
                                     local fakeReach = math.min(14.399, currentAttackRange)
                                     local pos = selfpos + dir * math.max(delta.Magnitude - fakeReach, 0)
                                     local safeAttackReach = math.min(delta.Magnitude, currentAttackRange, 14.4)
-
                                     swingCooldown = tick()
                                     bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
                                     store.attackReach = (safeAttackReach * 100) // 1 / 100
                                     store.attackReachUpdate = tick() + 1
-
+                                    
                                     if delta.Magnitude < effectiveCloseRange and ChargeTime.Value > 0.11 then
                                         AnimDelay = tick()
                                     end
-
+                                    
                                     AttackRemote:FireServer({
                                         weapon = sword.tool,
                                         chargedAttack = {chargeRatio = 0},
@@ -3585,8 +3603,7 @@ run(function()
                             end
                         end
                     end
-
-                    -- ターゲットボックス表示更新
+                    
                     for i, v in Boxes do
                         v.Adornee = attacked[i] and attacked[i].Entity.RootPart or nil
                         if v.Adornee then
@@ -3594,37 +3611,30 @@ run(function()
                             v.Transparency = 1 - attacked[i].Check.Opacity
                         end
                     end
-
-                    -- パーティクル表示更新
+                    
                     for i, v in Particles do
                         v.Position = attacked[i] and attacked[i].Entity.RootPart.Position or Vector3.new(9e9, 9e9, 9e9)
                         v.Parent = attacked[i] and gameCamera or nil
                     end
-
-                    -- ターゲットに向く
+                    
                     if Face.Enabled and attacked[1] then
                         local vec = attacked[1].Entity.RootPart.Position * Vector3.new(1, 0, 1)
                         entitylib.character.RootPart.CFrame = CFrame.lookAt(entitylib.character.RootPart.Position, Vector3.new(vec.X, entitylib.character.RootPart.Position.Y + 0.001, vec.Z))
                     end
-
+                    
                     task.wait(1 / UpdateRate.Value)
                 until not Killaura.Enabled
             else
-                -- ============================================================
-                -- 無効化時のクリーンアップ
-                -- ============================================================
                 store.KillauraTarget = nil
-                for _, v in Boxes do
-                    v.Adornee = nil
-                end
-                for _, v in Particles do
-                    v.Parent = nil
-                end
+                for _, v in Boxes do v.Adornee = nil end
+                for _, v in Particles do v.Parent = nil end
+                
                 if inputService.TouchEnabled then
                     pcall(function()
                         lplr.PlayerGui.MobileUI['2'].Visible = true
                     end)
                 end
+                
                 Attacking = false
                 if armC0 then
                     AnimTween = tweenService:Create(gameCamera.Viewmodel.RightHand.RightWrist, TweenInfo.new(AnimationTween.Enabled and 0.001 or 0.3, Enum.EasingStyle.Exponential), {
@@ -3632,46 +3642,44 @@ run(function()
                     })
                     AnimTween:Play()
                 end
+                
+                updateVisualiser()
             end
         end,
         Tooltip = 'Attack players around you\nwithout aiming at them.'
     })
 
     -- ============================================================
-    -- オプション定義
+    -- Options
     -- ============================================================
     Targets = Killaura:CreateTargets({
         Players = true,
         NPCs = true
     })
-
+    
     local methods = {'Damage', 'Distance'}
     for i in sortmethods do
         if not table.find(methods, i) then
             table.insert(methods, i)
         end
     end
-
+    
     SwingRange = Killaura:CreateSlider({
         Name = 'Swing range',
         Min = 1,
         Max = 40,
         Default = 40,
-        Suffix = function(val)
-            return val == 1 and 'stud' or 'studs'
-        end
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
     })
-
+    
     AttackRange = Killaura:CreateSlider({
         Name = 'Attack range',
         Min = 1,
         Max = 18,
         Default = 14,
-        Suffix = function(val)
-            return val == 1 and 'stud' or 'studs'
-        end
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
     })
-
+    
     ChargeTime = Killaura:CreateSlider({
         Name = 'Swing time',
         Min = 0,
@@ -3679,14 +3687,14 @@ run(function()
         Default = 0.42,
         Decimal = 100
     })
-
+    
     AngleSlider = Killaura:CreateSlider({
         Name = 'Max angle',
         Min = 1,
         Max = 360,
         Default = 360
     })
-
+    
     UpdateRate = Killaura:CreateSlider({
         Name = 'Update rate',
         Min = 1,
@@ -3694,14 +3702,14 @@ run(function()
         Default = 7,
         Suffix = 'hz'
     })
-
+    
     MaxTargets = Killaura:CreateSlider({
         Name = 'Max targets',
         Min = 1,
         Max = 5,
         Default = 5
     })
-
+    
     AirhitChance = Killaura:CreateSlider({
         Name = 'Airhit chance',
         Min = 0,
@@ -3709,21 +3717,21 @@ run(function()
         Default = 100,
         Suffix = '%'
     })
-
+    
     Sort = Killaura:CreateDropdown({
         Name = 'Target Mode',
         List = methods
     })
-
+    
     Mouse = Killaura:CreateToggle({Name = 'Require mouse down'})
     Swing = Killaura:CreateToggle({Name = 'No Swing'})
     GUI = Killaura:CreateToggle({Name = 'GUI check'})
-
+    
     AttackableCheck = Killaura:CreateToggle({
         Name = 'Attackable check',
         Tooltip = ''
     })
-
+    
     Killaura:CreateToggle({
         Name = 'Show target',
         Function = function(callback)
@@ -3741,14 +3749,12 @@ run(function()
                     Boxes[i] = box
                 end
             else
-                for _, v in Boxes do
-                    v:Destroy()
-                end
+                for _, v in Boxes do v:Destroy() end
                 table.clear(Boxes)
             end
         end
     })
-
+    
     BoxSwingColor = Killaura:CreateColorSlider({
         Name = 'Target Color',
         Darker = true,
@@ -3756,14 +3762,14 @@ run(function()
         DefaultOpacity = 0.5,
         Visible = false
     })
-
+    
     BoxAttackColor = Killaura:CreateColorSlider({
         Name = 'Attack Color',
         Darker = true,
         DefaultOpacity = 0.5,
         Visible = false
     })
-
+    
     Killaura:CreateToggle({
         Name = 'Target particles',
         Function = function(callback)
@@ -3799,14 +3805,12 @@ run(function()
                     Particles[i] = part
                 end
             else
-                for _, v in Particles do
-                    v:Destroy()
-                end
+                for _, v in Particles do v:Destroy() end
                 table.clear(Particles)
             end
         end
     })
-
+    
     ParticleTexture = Killaura:CreateTextBox({
         Name = 'Texture',
         Default = 'rbxassetid://14736249347',
@@ -3818,7 +3822,7 @@ run(function()
         Darker = true,
         Visible = false
     })
-
+    
     ParticleColor1 = Killaura:CreateColorSlider({
         Name = 'Color Begin',
         Function = function(hue, sat, val)
@@ -3832,7 +3836,7 @@ run(function()
         Darker = true,
         Visible = false
     })
-
+    
     ParticleColor2 = Killaura:CreateColorSlider({
         Name = 'Color End',
         Function = function(hue, sat, val)
@@ -3846,7 +3850,7 @@ run(function()
         Darker = true,
         Visible = false
     })
-
+    
     ParticleSize = Killaura:CreateSlider({
         Name = 'Size',
         Min = 0,
@@ -3861,9 +3865,9 @@ run(function()
         Darker = true,
         Visible = false
     })
-
+    
     Face = Killaura:CreateToggle({Name = 'Face target'})
-
+    
     Animation = Killaura:CreateToggle({
         Name = 'Custom Animation',
         Function = function(callback)
@@ -3876,19 +3880,17 @@ run(function()
             end
         end
     })
-
+    
     local animnames = {}
-    for i in anims do
-        table.insert(animnames, i)
-    end
-
+    for i in anims do table.insert(animnames, i) end
+    
     AnimationMode = Killaura:CreateDropdown({
         Name = 'Animation Mode',
         List = animnames,
         Darker = true,
         Visible = false
     })
-
+    
     AnimationSpeed = Killaura:CreateSlider({
         Name = 'Animation Speed',
         Min = 0,
@@ -3898,13 +3900,13 @@ run(function()
         Darker = true,
         Visible = false
     })
-
+    
     AnimationTween = Killaura:CreateToggle({
         Name = 'No Tween',
         Darker = true,
         Visible = false
     })
-
+    
     Limit = Killaura:CreateToggle({
         Name = 'Limit to items',
         Function = function(callback)
@@ -3916,18 +3918,18 @@ run(function()
         end,
         Tooltip = 'Only attacks when the sword is held'
     })
-
+    
     LegitAura = Killaura:CreateToggle({
         Name = 'Swing only',
         Tooltip = 'Only attacks while swinging manually'
     })
-
+    
     InMatchCheck = Killaura:CreateToggle({
         Name = 'In Match Check',
         Tooltip = 'Only runs Killaura while in a match\nWaits until match starts',
         Default = false
     })
-
+    
     IgnorePlayer = Killaura:CreateToggle({
         Name = 'Ignore Player',
         Tooltip = 'Enables ignoring specific players or changing their attack range',
@@ -3936,32 +3938,44 @@ run(function()
             if IgnoreRange then IgnoreRange.Object.Visible = callback end
         end
     })
-
+    
     IgnoredList = Killaura:CreateTextList({
         Name = 'Ignored Players',
         Placeholder = 'PlayerName',
         Darker = true,
         Visible = false
     })
-
+    
     IgnoreRange = Killaura:CreateSlider({
         Name = 'Ignore Range',
         Min = 0,
         Max = 22,
         Default = 0,
-        Suffix = function(val)
-            return val == 1 and 'stud' or 'studs'
-        end,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end,
         Darker = true,
         Visible = false,
         Tooltip = 'Attack range for ignored players. Set to 0 to completely ignore them.'
     })
-
-    -- ★ 新規追加: SkywarsCheck トグル
+    
     SkywarsCheck = Killaura:CreateToggle({
         Name = 'Skywars Check',
         Tooltip = 'Disables Killaura near SpectatorPlatform floor in Skywars (first 60s only)',
         Default = false
+    })
+
+    RangeVisualiser = Killaura:CreateToggle({
+        Name = 'Range Visualiser',
+        Function = function()
+            updateVisualiser()
+        end
+    })
+
+    VisualiserColor = Killaura:CreateColorSlider({
+        Name = 'Visualiser Color',
+        DefaultOpacity = 0.5,
+        Function = function()
+            updateVisualiser()
+        end
     })
 end)
 	
