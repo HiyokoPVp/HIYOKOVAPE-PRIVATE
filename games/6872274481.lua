@@ -3682,9 +3682,9 @@ run(function()
     
     ChargeTime = Killaura:CreateSlider({
         Name = 'Swing time',
-        Min = 0,
+        Min = 0.15,
         Max = 0.5,
-        Default = 0.42,
+        Default = 0.3,
         Decimal = 100
     })
     
@@ -3698,8 +3698,8 @@ run(function()
     UpdateRate = Killaura:CreateSlider({
         Name = 'Update rate',
         Min = 1,
-        Max = 10,
-        Default = 7,
+        Max = 120,
+        Default = 60,
         Suffix = 'hz'
     })
     
