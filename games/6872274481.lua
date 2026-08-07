@@ -17878,3 +17878,43 @@ run(function()
         Visible = true
     })
 end)
+
+run(function()
+    local FastCameraChange
+
+    -- Exploitのマウスホイールスクロール関数を安全に呼び出すラッパー
+    local function simulateScroll(dir)
+        pcall(function()
+            if typeof(mousescroll) == "function" then
+                mousescroll(dir)
+            elseif typeof(mousewheel) == "function" then
+                mousewheel(dir)
+            elseif typeof(mouse1scroll) == "function" then
+                mouse1scroll(dir)
+            end
+        end)
+    end
+
+    FastCameraChange = vape.Categories.Utility:CreateModule({
+        Name = 'FastCameraChange',
+        Function = function(callback)
+            -- task.spawnを使って、スクロール処理が他の処理をブロックしないようにする
+            task.spawn(function()
+                if callback then
+                    -- callbackがtrue（モジュールON）のとき -> 1人称にするためにホイールを上にスクロール
+                    for i = 1, 40 do
+                        simulateScroll(999999) -- 1: ホイール上（ズームイン）
+                        task.wait()
+                    end
+                else
+                    -- callbackがfalse（モジュールOFF）のとき -> 3人称にするためにホイールを下にスクロール
+                    for i = 1, 40 do
+                        simulateScroll(-9999999) -- -1: ホイール下（ズームアウト）
+                        task.wait()
+                    end
+                end
+            end)
+        end,
+        Tooltip = 'Simulates mouse wheel to toggle between 1st and 3rd person'
+    })
+end)
