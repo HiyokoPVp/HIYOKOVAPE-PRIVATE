@@ -18027,39 +18027,47 @@ run(function()
 	local Duration
 	local LimitItem
 
-	AutoMetal = vape.Categories.Kit:CreateModule({
+	AutoMetal = vape.Categories.Utility:CreateModule({
 		Name = 'AutoMetal',
 		Function = function(callback)
 			if callback then
 				repeat
 					if entitylib.isAlive then
-						-- LimitItemがオンの場合、金属探知機を持っていないかチェック
+						-- LimitItemチェック
 						if LimitItem.Enabled and (not store.hand or not store.hand.tool or store.hand.tool.Name ~= 'metal_detector') then
 							task.wait(0.1)
 							continue
 						end
 
 						local localPosition = entitylib.character.RootPart.Position
-						local metals = collectionService:GetTagged('hidden-metal')
-						
-						for _, v in metals do
-							-- 距離チェック
-							if v and v.Parent and (v.Position - localPosition).Magnitude <= Range.Value then
-								-- アニメーション再生
+
+						for _, v in collectionService:GetTagged('hidden-metal') do
+							if not AutoMetal.Enabled then break end
+							if not v or not v.Parent then continue end
+
+							-- Model対応: PrimaryPart or GetPivot で位置取得
+							local part = v:IsA('Model') and v.PrimaryPart or v
+							if not part then continue end
+
+							local dist = (part.Position - localPosition).Magnitude
+							if dist <= Range.Value then
+								-- アニメーション
 								if Animation.Enabled then
 									pcall(function()
-										bedwars.GameAnimationUtil:playAnimation(lplr.Character, bedwars.AnimationType.SHOVEL_DIG)
+										bedwars.GameAnimationUtil:playAnimation(
+											lplr.Character,
+											bedwars.AnimationType.SHOVEL_DIG
+										)
 									end)
 								end
 
-								-- メタル収集パケット送信
+								-- メタル収集
 								pcall(function()
-									bedwars.Client:Get('CollectCollectableEntity'):FireServer({
+									bedwars.Client:Get(remotes.CollectCollectableEntity):SendToServer({
 										id = v:GetAttribute('Id')
 									})
 								end)
-								
-								-- 連続取得防止のための待機時間
+
 								task.wait(Duration.Value)
 							end
 						end
