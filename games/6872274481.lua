@@ -18020,104 +18020,79 @@ run(function()
 	})
 end)
 
-local function getFunctionRange(func)
-	local last = false
-	for _, v in debug.getconstants(func) do
-		if v == 'maxActivationDistance' then
-			last = true
-		elseif last then
-			return v and typeof(v) == 'number' and v or nil
-		end
-	end
-	return nil
-end
-
 run(function()
 	local AutoMetal
-	local Limit
-	local StreamerMode
-	local Duration
-	local Range
 	local Animation
-	
-	local Legit = getFunctionRange(bedwars.HiddenMetalController.onKitLocalActivated) or 0
-	local cooldowns = {}
-	
+	local Range
+	local Duration
+	local LimitItem
+
 	AutoMetal = vape.Categories.Kit:CreateModule({
 		Name = 'AutoMetal',
-		Function = function(call)
-			if call then
-				AutoMetal:Clean(proximityPromptService.PromptShown:Connect(function(prompt)
-					if StreamerMode.Enabled and prompt.Name == 'hidden-metal-prompt' and (not Limit.Enabled or store.hand.tool and store.hand.tool.Name == 'metal_detector') then
-						task.wait(0.1)
-						prompt:InputHoldBegin()
-					end
-				end))
-	
+		Function = function(callback)
+			if callback then
 				repeat
-					if not StreamerMode.Enabled and entitylib.isAlive then
+					if entitylib.isAlive then
+						-- LimitItemがオンの場合、金属探知機を持っていないかチェック
+						if LimitItem.Enabled and (not store.hand or not store.hand.tool or store.hand.tool.Name ~= 'metal_detector') then
+							task.wait(0.1)
+							continue
+						end
+
 						local localPosition = entitylib.character.RootPart.Position
-						for _, v in collectionService:GetTagged('hidden-metal') do
-							if tick() > (cooldowns[v] or 0) and (localPosition - v.Part.Position).Magnitude <= Range.Value and (not Limit.Enabled or store.hand.tool and store.hand.tool.Name == 'metal_detector') then
-								if Duration.Value > 0 then
-									task.wait(Duration.Value)
-								end
-	
-								if (localPosition - v.Part.Position).Magnitude <= Range.Value then
-									if Animation.Enabled then
+						local metals = collectionService:GetTagged('hidden-metal')
+						
+						for _, v in metals do
+							-- 距離チェック
+							if v and v.Parent and (v.Position - localPosition).Magnitude <= Range.Value then
+								-- アニメーション再生
+								if Animation.Enabled then
+									pcall(function()
 										bedwars.GameAnimationUtil:playAnimation(lplr.Character, bedwars.AnimationType.SHOVEL_DIG)
-										bedwars.SoundManager:playSound(bedwars.SoundList.SNAP_TRAP_CONSUME_MARK)
-									end
-	
-									bedwars.Handler:Get('CollectCollectableEntity'):Fire('SendToServer', {
+									end)
+								end
+
+								-- メタル収集パケット送信
+								pcall(function()
+									bedwars.Client:Get('CollectCollectableEntity'):FireServer({
 										id = v:GetAttribute('Id')
 									})
-									cooldowns[v] = tick() + 1
-								end
+								end)
+								
+								-- 連続取得防止のための待機時間
+								task.wait(Duration.Value)
 							end
 						end
 					end
 					task.wait(0.1)
 				until not AutoMetal.Enabled
-			else
-				table.clear(cooldowns)
 			end
 		end,
-		Tooltip = 'Automatically uses the metal kit'
+		Tooltip = 'Automatically collects hidden metal nearby'
 	})
-	Limit = AutoMetal:CreateToggle({Name = 'Limit to item'})
-	
-	StreamerMode = AutoMetal:CreateToggle({
-		Name = 'Streamer mode',
-		Function = function(call)
-			if Duration then
-				Duration.Object.Visible = not call
-				Range.Object.Visible = not call
-				Animation.Object.Visible = not call
-			end
-		end,
-		Tooltip = 'Actually does the metal prompt thing for you'
+
+	LimitItem = AutoMetal:CreateToggle({
+		Name = 'Limit to items',
+		Default = true,
+		Tooltip = 'Only collects when holding a metal detector'
 	})
+
 	Animation = AutoMetal:CreateToggle({
 		Name = 'Animation',
 		Default = true,
 		Tooltip = 'Plays the metal collect animation'
 	})
+
 	Range = AutoMetal:CreateSlider({
 		Name = 'Range',
 		Min = 1,
 		Max = 20,
-		Default = Legit,
+		Default = 18,
 		Suffix = function(val)
 			return val > 1 and 'studs' or 'stud'
 		end
 	})
-	AutoMetal:CreateButton({
-		Name = 'Sync to legit range',
-		Function = function()
-			Range:SetValue(Legit)
-		end
-	})
+
 	Duration = AutoMetal:CreateSlider({
 		Name = 'Delay',
 		Min = 0,
