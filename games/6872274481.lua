@@ -18023,17 +18023,17 @@ end)
 run(function()
 	local AutoMetal
 	local Animation
+	local PlaySound
 	local Range
 	local Duration
 	local LimitItem
 
-	AutoMetal = vape.Categories.Utility:CreateModule({
+	AutoMetal = vape.Categories.Kit:CreateModule({
 		Name = 'AutoMetal',
 		Function = function(callback)
 			if callback then
 				repeat
 					if entitylib.isAlive then
-						-- LimitItemチェック
 						if LimitItem.Enabled and (not store.hand or not store.hand.tool or store.hand.tool.Name ~= 'metal_detector') then
 							task.wait(0.1)
 							continue
@@ -18045,13 +18045,10 @@ run(function()
 							if not AutoMetal.Enabled then break end
 							if not v or not v.Parent then continue end
 
-							-- Model対応: PrimaryPart or GetPivot で位置取得
 							local part = v:IsA('Model') and v.PrimaryPart or v
 							if not part then continue end
 
-							local dist = (part.Position - localPosition).Magnitude
-							if dist <= Range.Value then
-								-- アニメーション
+							if (part.Position - localPosition).Magnitude <= Range.Value then
 								if Animation.Enabled then
 									pcall(function()
 										bedwars.GameAnimationUtil:playAnimation(
@@ -18061,7 +18058,14 @@ run(function()
 									end)
 								end
 
-								-- メタル収集
+								if PlaySound.Enabled then
+									pcall(function()
+										bedwars.SoundManager:playSound(
+											bedwars.SoundList.SNAP_TRAP_CONSUME_MARK
+										)
+									end)
+								end
+
 								pcall(function()
 									bedwars.Client:Get(remotes.CollectCollectableEntity):SendToServer({
 										id = v:GetAttribute('Id')
@@ -18089,6 +18093,12 @@ run(function()
 		Name = 'Animation',
 		Default = true,
 		Tooltip = 'Plays the metal collect animation'
+	})
+
+	PlaySound = AutoMetal:CreateToggle({
+		Name = 'Play Sound',
+		Default = true,
+		Tooltip = 'Plays a sound effect when collecting'
 	})
 
 	Range = AutoMetal:CreateSlider({
