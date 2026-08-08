@@ -18020,6 +18020,18 @@ run(function()
 	})
 end)
 
+local function getFunctionRange(func)
+	local last = false
+	for _, v in debug.getconstants(func) do
+		if v == 'maxActivationDistance' then
+			last = true
+		elseif last then
+			return v and typeof(v) == 'number' and v or nil
+		end
+	end
+	return nil
+end
+
 run(function()
 	local AutoMetal
 	local Limit
