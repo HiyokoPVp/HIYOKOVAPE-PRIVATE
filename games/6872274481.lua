@@ -18234,14 +18234,21 @@ run(function()
 	end
 
 	-- Legacy Fonts: フォントを最軽量のLegacyに、アウトライン除去
-	-- （Enum.Font直接代入は非推奨だがユーザー指定のため維持）
+	-- （新クライアントはFontFaceオブジェクト必須、旧クライアントはEnum.Font）
 	local function setLegacyFonts(obj, enabled)
 		-- 入力ボックスは実クラスがTextBox
 		if not (obj:IsA('TextLabel') or obj:IsA('TextButton') or obj:IsA('TextBox')) then return end
 		if isVapeUI(obj) then return end
 		if enabled then
 			saveProps(obj, {'FontFace', 'TextStrokeTransparency'})
-			obj.FontFace = Enum.Font.Legacy
+			local ok = pcall(function()
+				obj.FontFace = FontFace.new('rbxasset://fonts/families/LegacyArial.json')
+			end)
+			if not ok then
+				pcall(function()
+					obj.FontFace = Enum.Font.Legacy
+				end)
+			end
 			obj.TextStrokeTransparency = 1
 		else
 			restoreProps(obj, {'FontFace', 'TextStrokeTransparency'})
