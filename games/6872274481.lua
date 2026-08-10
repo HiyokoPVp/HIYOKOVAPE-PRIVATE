@@ -18282,7 +18282,7 @@ run(function()
 		local tool = char and char:FindFirstChildOfClass('Tool')
 		local root = char and char.PrimaryPart
 		local pings = coroutine.wrap(function()
-			return game:GetService('Stats').Network.ServerStats['Data Ping']:GetValueString()
+			return 0
 		end)()
 		return string.format(
 			'Game: %s | PlaceId: %d | Players: %d | Ping: %s | Health: %.0f/%.0f | Tool: %s | Position: %s',
