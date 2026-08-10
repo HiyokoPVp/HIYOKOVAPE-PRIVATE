@@ -18230,7 +18230,7 @@ run(function()
 	Threshold = AutoWhisper:CreateSlider({
 		Name = 'Health',
 		Min = 1,
-		Max = 100,
+		Max = 200,
 		Default = 99,
 		Darker = true,
 		Suffix = '%'
