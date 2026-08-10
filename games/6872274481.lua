@@ -18166,7 +18166,7 @@ run(function()
 	local Threshold
 	local Fly
 	
-	AutoWhisper = vape.Categories.Minigames:CreateModule({
+	AutoWhisper = vape.Categories.Kit:CreateModule({
 		Name = 'AutoWhisper',
 		Function = function(callback)
 			if callback then
