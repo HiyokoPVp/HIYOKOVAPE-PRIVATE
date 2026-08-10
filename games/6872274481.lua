@@ -18241,3 +18241,94 @@ run(function()
 	})
 end)
 
+run(function()
+	local AIAdvice
+	local APIKey
+	local req = request or syn.request or httprequest
+
+	-- Groqに質問して回答を返す
+	local function askGroq(prompt)
+		if not req then return 'request API not found in this executor.' end
+		local res = req({
+			Url = 'https://api.groq.com/openai/v1/chat/completions',
+			Method = 'POST',
+			Headers = {
+				['Content-Type'] = 'application/json',
+				Authorization = 'Bearer ' .. APIKey.Value
+			},
+			Body = httpService:JSONEncode({
+				model = 'openai/gpt-oss-120b',
+				messages = {
+					{ role = 'system', content = 'あなたはRobloxゲームのアドバイザー。プレイヤーの現在状況を分析し、次に何をすべきか日本語で簡潔に1〜3文でアドバイスしてください。' },
+					{ role = 'user', content = prompt }
+				},
+				max_tokens = 120,
+				temperature = 0.7
+			})
+		})
+		if res.StatusCode ~= 200 then
+			return 'API error ' .. tostring(res.StatusCode) .. ': ' .. tostring(res.Body):sub(1, 120)
+		end
+		local data = httpService:JSONDecode(res.Body)
+		local reply = data and data.choices and data.choices[1] and data.choices[1].message and data.choices[1].message.content
+		if not reply then return 'No reply from API.' end
+		return reply
+	end
+
+	-- 現在のゲーム状況をまとめる
+	local function getContext()
+		local char = lplr.Character
+		local hum = char and char:FindFirstChildOfClass('Humanoid')
+		local tool = char and char:FindFirstChildOfClass('Tool')
+		local root = char and char.PrimaryPart
+		local pings = coroutine.wrap(function()
+			return game:GetService('Stats').Network.ServerStats['Data Ping']:GetValueString()
+		end)()
+		return string.format(
+			'Game: %s | PlaceId: %d | Players: %d | Ping: %s | Health: %.0f/%.0f | Tool: %s | Position: %s',
+			game.Name, game.PlaceId, #playersService:GetPlayers(), tostring(pings),
+			hum and hum.Health or 0, hum and hum.MaxHealth or 0,
+			tool and tool.Name or 'none',
+			root and string.format('%.0f,%.0f,%.0f', root.Position.X, root.Position.Y, root.Position.Z) or '?'
+		)
+	end
+
+	-- アドバイス取得→通知
+	local function askAdvice()
+		if APIKey.Value == '' then
+			notif('AI Advice', 'Set your Groq API key first.', 5, 'warning')
+			return
+		end
+		local ok, result = pcall(askGroq, getContext())
+		if ok then
+			notif('AI Advice', result, 10)
+		else
+			notif('AI Advice', 'Request failed: ' .. tostring(result), 8, 'warning')
+		end
+	end
+
+	-- 定期ループ（OFFで自動終了）
+	local function loop()
+		while AIAdvice.Enabled do
+			task.wait(25)
+			if AIAdvice.Enabled then
+				task.spawn(askAdvice)
+			end
+		end
+	end
+
+	AIAdvice = vape.Categories.Utility:CreateModule({
+		Name = 'AI Advice',
+		Function = function(callback)
+			if callback then
+				task.spawn(askAdvice)
+				task.spawn(loop)
+			end
+		end,
+		Tooltip = 'AI (Groq) advises you what to do next.'
+	})
+	APIKey = AIAdvice:CreateTextBox({
+		Name = 'Groq API Key',
+		Default = ''
+	})
+end)
