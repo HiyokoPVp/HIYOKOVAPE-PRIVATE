@@ -18020,3 +18020,142 @@ run(function()
 	})
 end)
 
+run(function()
+	local ClosetCheatSpeed
+	local Value
+	local DontSpeedWhenPeopleSeeYou
+	local WallCheck
+	local IsTeamMate
+	local MaxAngle
+	local Notify
+	local rayCheck = RaycastParams.new()
+	rayCheck.RespectCanCollide = true
+
+	-- 現在スピード発動中か（遷移時のみ更新して負荷を抑える）
+	local speeding = false
+
+	-- スピードON/OFFの切り替え（friction・定数書き換えは遷移時のみ）
+	local function setSpeeding(bool)
+		if speeding == bool then return end
+		speeding = bool
+		frictionTable.Speed = bool or nil
+		updateVelocity()
+		pcall(function()
+			debug.setconstant(bedwars.WindWalkerController.updateSpeed, 7, bool and 'constantSpeedMultiplier' or 'moveSpeedMultiplier')
+		end)
+		bedwars.StatefulEntityKnockbackController.lastImpulseTime = bool and math.huge or time()
+		if Notify.Enabled then
+			if bool then
+				notif('ClosetCheatSpeed', 'Speed resumed.', 3)
+			else
+				notif('ClosetCheatSpeed', 'Speed stopped (someone is watching you).', 3, 'warning')
+			end
+		end
+	end
+
+	-- 誰かに見られているか判定
+	local function isSeen()
+		if not DontSpeedWhenPeopleSeeYou.Enabled then return false end
+		if not entitylib.isAlive or not entitylib.character or not entitylib.character.RootPart then return true end
+
+		local myPos = entitylib.character.RootPart.Position
+		local myHead = entitylib.character.Head
+		local myTeam = lplr:GetAttribute('Team')
+
+		for _, ent in entitylib.List do
+			local plr = ent.Player
+			if not plr or plr == lplr then continue end
+			if not ent.RootPart or not ent.Head then continue end
+
+			-- IsTeamMateがOFFなら味方は無視
+			if not IsTeamMate.Enabled and myTeam == plr:GetAttribute('Team') then
+				continue
+			end
+
+			-- 相手のLookVectorと「相手→自分」方向ベクトルのなす角で判定
+			local look = ent.RootPart.CFrame.LookVector * Vector3.new(1, 0, 1)
+			local toMe = (myPos - ent.RootPart.Position) * Vector3.new(1, 0, 1)
+			if look.Magnitude < 0.01 or toMe.Magnitude < 0.01 then continue end
+
+			local angle = math.acos(math.clamp(look.Unit:Dot(toMe.Unit), -1, 1))
+			if angle <= math.rad(MaxAngle.Value) then
+				-- 壁チェック: 間に壁があれば視界が遮られて見られていない扱い
+				if WallCheck.Enabled and myHead then
+					rayCheck.FilterDescendantsInstances = {ent.Character, lplr.Character, gameCamera}
+					rayCheck.CollisionGroup = entitylib.character.RootPart.CollisionGroup
+					local origin = ent.Head.Position
+					local dir = myHead.Position - origin
+					if dir.Magnitude > 0.01 then
+						local ray = workspace:Raycast(origin, dir, rayCheck)
+						if ray and (ray.Position - origin).Magnitude < dir.Magnitude then
+							continue
+						end
+					end
+				end
+				return true
+			end
+		end
+		return false
+	end
+
+	ClosetCheatSpeed = vape.Categories.Combat:CreateModule({
+		Name = 'ClosetCheatSpeed',
+		Function = function(callback)
+			if callback then
+				ClosetCheatSpeed:Clean(runService.PreSimulation:Connect(function(dt)
+					local shouldSpeed = not isSeen()
+					setSpeeding(shouldSpeed)
+
+					if shouldSpeed and entitylib.isAlive and not Fly.Enabled and not InfiniteFly.Enabled and not LongJump.Enabled and isnetworkowner(entitylib.character.RootPart) then
+						local state = entitylib.character.Humanoid:GetState()
+						if state == Enum.HumanoidStateType.Climbing then return end
+
+						local root, velo = entitylib.character.RootPart, getSpeed()
+						local moveDirection = AntiFallDirection or entitylib.character.Humanoid.MoveDirection
+						local destination = (moveDirection * math.max(Value.Value - velo, 0) * dt)
+
+						root.CFrame += destination
+						root.AssemblyLinearVelocity = (moveDirection * velo) + Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+					end
+				end))
+			else
+				setSpeeding(false)
+			end
+		end,
+		Tooltip = 'Increases your movement speed, but only when nobody is looking at you.'
+	})
+	Value = ClosetCheatSpeed:CreateSlider({
+		Name = 'Speed',
+		Min = 1,
+		Max = 22,
+		Default = 22,
+		Suffix = function(val)
+			return val == 1 and 'stud' or 'studs'
+		end
+	})
+	DontSpeedWhenPeopleSeeYou = ClosetCheatSpeed:CreateToggle({
+		Name = 'DontSpeedWhenPeopleSeeYou',
+		Default = true
+	})
+	WallCheck = ClosetCheatSpeed:CreateToggle({
+		Name = 'Wall Check',
+		Default = true
+	})
+	IsTeamMate = ClosetCheatSpeed:CreateToggle({
+		Name = 'IsTeamMate',
+		Default = false
+	})
+	MaxAngle = ClosetCheatSpeed:CreateSlider({
+		Name = 'Max Angle',
+		Min = 1,
+		Max = 180,
+		Default = 90,
+		Suffix = function(val)
+			return val == 1 and 'degree' or 'degrees'
+		end
+	})
+	Notify = ClosetCheatSpeed:CreateToggle({
+		Name = 'Notify',
+		Default = false
+	})
+end)
