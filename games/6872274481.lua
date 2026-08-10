@@ -18148,8 +18148,8 @@ run(function()
 	MaxAngle = ClosetCheatSpeed:CreateSlider({
 		Name = 'Max Angle',
 		Min = 1,
-		Max = 180,
-		Default = 90,
+		Max = 85,
+		Default = 70,
 		Suffix = function(val)
 			return val == 1 and 'degree' or 'degrees'
 		end
