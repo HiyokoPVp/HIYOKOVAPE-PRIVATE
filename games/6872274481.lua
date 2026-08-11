@@ -94,6 +94,8 @@ local function GetAirTime()
 	return time() - airStart
 end
 
+repeat task.wait() until entitylib.isAlive
+
 local store = {
     attackReach = 0,
     attackReachUpdate = tick(),
