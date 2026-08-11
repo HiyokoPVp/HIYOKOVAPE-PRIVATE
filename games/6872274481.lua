@@ -3519,7 +3519,7 @@ run(function()
 		
 		-- 1. 弓に持ち替え
 		if switchItem(bowItem.tool, 0.05) then
-			task.wait(0.08) -- Legitな持ち替え待機時間
+			task.wait() -- Legitな持ち替え待機時間
 			
 			-- 2. 射撃
 			local selfpos = entitylib.character.RootPart.Position
@@ -3539,10 +3539,10 @@ run(function()
 					projectileRemote:InvokeServer(bowItem.tool, 'arrow', 'arrow', shootPosition, selfpos, dir * speed, httpService:GenerateGUID(true), {drawDurationSeconds = 1}, workspace:GetServerTimeNow() - 0.045)
 					
 					-- 3. 元の武器（または剣）に持ち替えて攻撃
-					task.wait(0.08) -- 射撃後の硬直表現
+					task.wait(0) -- 射撃後の硬直表現
 					local sword = store.tools.sword
 					if sword and switchItem(sword.tool, 0.05) then
-						task.wait(0.05)
+						task.wait(0)
 						lastFastHitTime = tick()
 						return true -- コンボ成功
 					end
