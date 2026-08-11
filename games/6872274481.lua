@@ -3518,7 +3518,7 @@ run(function()
 		local currentTool = store.hand.tool
 		
 		-- 1. 弓に持ち替え
-		if switchItem(bowItem.tool, 0.05) then
+		if switchItem(bowItem.tool, 0.01) then
 			task.wait() -- Legitな持ち替え待機時間
 			
 			-- 2. 射撃
