@@ -3495,9 +3495,9 @@ run(function()
 	end
 
 	-- ============================================================
-	-- FastHit Logic (Bow Combo)
+	-- FastHit Logic (Bow Combo) - FIXED
 	-- ============================================================
-	local lastFastHitTime = 0
+	local lastFastHitTime = tick() -- ★修正: 初期値を現在時刻にし、起動直後の即時発動を防止
 	local projectileRemote = {InvokeServer = function() end}
 	task.spawn(function()
 		projectileRemote = bedwars.Client:Get(remotes.FireProjectile).instance
@@ -3514,12 +3514,9 @@ run(function()
 		local arrowItem = getItem('arrow')
 		if not arrowItem or arrowItem.amount < 1 then return false end
 
-		-- 現在の手持ちを記憶（戻す用）
-		local currentTool = store.hand.tool
-		
 		-- 1. 弓に持ち替え
-		if switchItem(bowItem.tool, 0.01) then
-			task.wait() -- Legitな持ち替え待機時間
+		if switchItem(bowItem.tool, 0.05) then
+			task.wait(0.08) -- Legitな持ち替え待機時間
 			
 			-- 2. 射撃
 			local selfpos = entitylib.character.RootPart.Position
@@ -3538,19 +3535,21 @@ run(function()
 					bedwars.ProjectileController:createLocalProjectile(meta, 'arrow', 'arrow', shootPosition, '', dir * speed, {drawDurationSeconds = 1})
 					projectileRemote:InvokeServer(bowItem.tool, 'arrow', 'arrow', shootPosition, selfpos, dir * speed, httpService:GenerateGUID(true), {drawDurationSeconds = 1}, workspace:GetServerTimeNow() - 0.045)
 					
-					-- 3. 元の武器（または剣）に持ち替えて攻撃
-					task.wait(0) -- 射撃後の硬直表現
-					local sword = store.tools.sword
-					if sword and switchItem(sword.tool, 0.05) then
-						task.wait(0)
+					-- 3. 剣に持ち替えて攻撃
+					task.wait(0.08) -- 射撃後の硬直表現
+					
+					-- ★修正: getSword()を使って確実に剣を取得する
+					local swordItem, swordSlot = getSword()
+					if swordItem and switchItem(swordItem.tool, 0.05) then
+						task.wait(0.05)
 						lastFastHitTime = tick()
 						return true -- コンボ成功
+					else
+						-- 剣が見つからない、または持ち替え失敗時は何もしない（誤ったアイテムを持つことを防ぐ）
+						return false
 					end
 				end
 			end
-			
-			-- 失敗時も元に戻す試み
-			if currentTool then switchItem(currentTool, 0.05) end
 		end
 		return false
 	end
