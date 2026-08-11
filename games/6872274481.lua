@@ -1011,7 +1011,6 @@ run(function()
 		Roact = require(replicatedStorage['rbxts_include']['node_modules']['@rbxts']['roact'].src),
 		RuntimeLib = require(replicatedStorage['rbxts_include'].RuntimeLib),
 		SoundList = require(replicatedStorage.TS.sound['game-sound']).GameSound,
-		SoundManager = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out.shared.sound['sound-manager']).SoundManager,
 		Store = require(lplr.PlayerScripts.TS.ui.store).ClientStore,
 		TeamUpgradeMeta = debug.getupvalue(require(replicatedStorage.TS.games.bedwars['team-upgrade']['team-upgrade-meta']).getTeamUpgradeMetaForQueue, 6),
 		UILayers = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).UILayers,
