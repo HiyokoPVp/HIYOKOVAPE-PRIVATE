@@ -2068,7 +2068,7 @@ for _, v in {'AntiRagdoll', 'TriggerBot', 'SilentAim', 'Jesus', 'AutoRejoin', 'R
 end
 
 
-print("25PAN clan")
+print("25PAN clan asdda")
 
 run(function()
     local AimAssist
