@@ -4951,7 +4951,7 @@ run(function()
 	Folder.Parent = vape.gui
 	local methodused
 	local refreshNametag
-
+	
 	-- [修正] オプション変数の宣言
 	local NameTags, Targets, FontOption, Color, Scale, Background, Health, Distance
 	local Equipment, RankDisplay, DisplayDevice, DisplayResource, DisplayName
@@ -5155,26 +5155,19 @@ run(function()
 		return (ok and typeof(icon) == 'string') and icon or ''
 	end
 
-	-- [修正] インベントリ取得のフォールバック強化 (CatV6準拠)
+	-- [修正] インベントリ取得のフォールバック強化
 	local function getInventory(player)
 		if not player then return nil end
 		local inv
 		pcall(function()
 			if store and store.inventories then
-				-- 1. プレイヤーオブジェクトで直接検索 (最も確実)
 				inv = store.inventories[player]
-				
-				-- 2. UserIdで検索
 				if not inv and player.UserId then
 					inv = store.inventories[player.UserId]
 				end
-				
-				-- 3. 名前検索
 				if not inv and player.Name then
 					inv = store.inventories[player.Name]
 				end
-
-				-- 4. それでもなければgetInventory関数を再試行
 				if not inv and bedwars.getInventory then
 					inv = bedwars.getInventory(player)
 					if inv and next(inv) then
@@ -5262,7 +5255,7 @@ run(function()
 	end
 
 	-- =========================================================
-	-- Normalモード用: リソースアイコンUI管理 (既存維持)
+	-- Normalモード用: リソースアイコンUI管理
 	-- =========================================================
 	local function removeResourceIcons(nametag)
 		if not nametag or typeof(nametag.GetChildren) ~= 'function' then return end
@@ -5324,7 +5317,7 @@ run(function()
 	end
 
 	-- =========================================================
-	-- Drawingモード用: リソーステキスト生成 (既存維持)
+	-- Drawingモード用: リソーステキスト生成
 	-- =========================================================
 	local function getResourceDrawingText(ent)
 		if not DisplayResource or not DisplayResource.Enabled or not ent or not ent.Player then return '' end
@@ -5338,7 +5331,6 @@ run(function()
 
 	-- =========================================================
 	-- [重要] Kitメタ / Equipment ヘルパー
-	-- ※Kit関連のロジックは修正していません
 	-- =========================================================
 	local EQUIPMENT_SLOTS = { 'Hand', 'Helmet', 'Chestplate', 'Boots', 'Kit' }
 
@@ -5393,12 +5385,10 @@ run(function()
 	local function updateEquipmentIcons(ent, nametag)
 		if not Equipment or not Equipment.Enabled then return end
 		if not ent or not ent.Player or not nametag then return end
-		
 		ensureEquipmentIcons(nametag)
 		
 		-- インベントリ取得 (修正済みのgetInventoryを使用)
 		local inv = getInventory(ent.Player)
-		
 		-- デバッグ用: インベントリが取得できない場合は早期リターン
 		if not inv then return end
 
@@ -5528,20 +5518,24 @@ run(function()
 			local nametag = Instance.new('TextLabel')
 			Strings[ent] = buildBaseName(ent, true)
 			Strings[ent] = appendHealthTextNormal(Strings[ent], ent)
+			
 			if Equipment and Equipment.Enabled and ent.Player then
 				ensureEquipmentIcons(nametag)
 				updateEquipmentIcons(ent, nametag)
 			end
+
 			nametag.TextSize = 14 * getScale()
 			local fontFace = Enum.Font.Gotham
 			if FontOption and FontOption.Value then fontFace = FontOption.Value end
 			nametag.FontFace = fontFace
+
 			local displayText = Strings[ent]
 			local mag = 0
 			if Distance and Distance.Enabled then
 				mag = getSafeDistance(ent)
 				displayText = getDistancePrefixRich(mag) .. displayText
 			end
+
 			local size = safeGetFontSize(safeRemoveTags(displayText), nametag.TextSize, nametag.FontFace, Vector2.new(100000, 100000))
 			local tagName = 'NameTag'
 			pcall(function() tagName = ent.Player and ent.Player.Name or (ent.Character and ent.Character.Name or 'NameTag') end)
@@ -5558,6 +5552,7 @@ run(function()
 			nametag.Parent = Folder
 			Reference[ent] = nametag
 			Sizes[ent] = (Distance and Distance.Enabled) and mag or nil
+			
 			pcall(updateRankIcon, ent, nametag)
 			pcall(updateDeviceLabel, ent, nametag)
 			pcall(updateResourceIcons, ent, nametag, size.X + 8)
@@ -5574,18 +5569,21 @@ run(function()
 			nametag.Text.Size = 15 * getScale()
 			nametag.Text.Font = 0
 			nametag.Text.ZIndex = 2
+
 			Strings[ent] = buildBaseName(ent, false)
 			Strings[ent] = appendHealthTextDrawing(Strings[ent], ent)
 			if Equipment and Equipment.Enabled then Strings[ent] = Strings[ent] .. getEquipmentText(ent) end
 			Strings[ent] = Strings[ent] .. getRankText(ent)
 			Strings[ent] = Strings[ent] .. getDeviceText(ent)
 			Strings[ent] = Strings[ent] .. getResourceDrawingText(ent)
+
 			local displayText = Strings[ent]
 			local mag = 0
 			if Distance and Distance.Enabled then
 				mag = getSafeDistance(ent)
 				displayText = getDistancePrefixText(mag) .. displayText
 			end
+
 			nametag.Text.Text = displayText
 			nametag.Text.Color = safeGetEntityColor(ent) or getFallbackColor()
 			nametag.BG.Size = Vector2.new(nametag.Text.TextBounds.X + 8, nametag.Text.TextBounds.Y + 7)
@@ -5615,28 +5613,33 @@ run(function()
 			Sizes[ent] = nil
 			Strings[ent] = buildBaseName(ent, true)
 			Strings[ent] = appendHealthTextNormal(Strings[ent], ent)
+			
 			if Equipment and Equipment.Enabled and ent.Player then
 				ensureEquipmentIcons(nametag)
 				updateEquipmentIcons(ent, nametag)
 			elseif Equipment and not Equipment.Enabled and ent.Player then
 				removeEquipmentIcons(nametag)
 			end
+
 			if RankDisplay and RankDisplay.Enabled and ent.Player then
 				pcall(updateRankIcon, ent, nametag)
 			else
 				pcall(removeRankIcon, nametag)
 			end
+
 			if DisplayDevice and DisplayDevice.Enabled and ent.Player then
 				pcall(updateDeviceLabel, ent, nametag)
 			else
 				pcall(removeDeviceLabel, nametag)
 			end
+
 			local displayText = Strings[ent]
 			local mag
 			if Distance and Distance.Enabled then
 				mag = getSafeDistance(ent)
 				displayText = getDistancePrefixRich(mag) .. displayText
 			end
+
 			local size = safeGetFontSize(safeRemoveTags(displayText), nametag.TextSize, nametag.FontFace, Vector2.new(100000, 100000))
 			nametag.Size = UDim2.fromOffset(size.X + 8, size.Y + 7)
 			nametag.Text = displayText
@@ -5654,12 +5657,14 @@ run(function()
 			Strings[ent] = Strings[ent] .. getRankText(ent)
 			Strings[ent] = Strings[ent] .. getDeviceText(ent)
 			Strings[ent] = Strings[ent] .. getResourceDrawingText(ent)
+
 			local displayText = Strings[ent]
 			local mag
 			if Distance and Distance.Enabled then
 				mag = getSafeDistance(ent)
 				displayText = getDistancePrefixText(mag) .. displayText
 			end
+
 			nametag.Text.Text = displayText
 			nametag.BG.Size = Vector2.new(nametag.Text.TextBounds.X + 8, nametag.Text.TextBounds.Y + 7)
 			nametag.Text.Color = safeGetEntityColor(ent) or getFallbackColor()
@@ -5683,18 +5688,19 @@ run(function()
 	}
 
 	local EQUIPMENT_UPDATE_INTERVAL = 0.5
-
 	local Loop = {
 		Normal = function()
 			for ent, nametag in Reference do
 				if not nametag or not nametag.Parent then continue end
 				if not ent or not ent.RootPart then nametag.Visible = false; continue end
+				
 				if DistanceCheck and DistanceCheck.Enabled and DistanceLimit then
 					local dist = getDistance(ent)
 					local min = tonumber(DistanceLimit.ValueMin) or 0
 					local max = tonumber(DistanceLimit.ValueMax) or 256
 					if dist < min or dist > max then nametag.Visible = false; continue end
 				end
+
 				local now = tick()
 				if ent.Player and ((Equipment and Equipment.Enabled) or (DisplayResource and DisplayResource.Enabled)) then
 					if not ent.LastEquipUpdate or now - ent.LastEquipUpdate >= EQUIPMENT_UPDATE_INTERVAL then
@@ -5706,6 +5712,7 @@ run(function()
 						end
 					end
 				end
+
 				local headPos, headVis
 				local okView = pcall(function()
 					local hipHeight = tonumber(ent.HipHeight) or 0
@@ -5714,6 +5721,7 @@ run(function()
 				if not okView or not headPos then nametag.Visible = false; continue end
 				nametag.Visible = headVis
 				if not headVis then continue end
+
 				if Distance and Distance.Enabled then
 					local mag = getSafeDistance(ent)
 					if Sizes[ent] ~= mag then
@@ -5732,12 +5740,14 @@ run(function()
 			for ent, nametag in Reference do
 				if not nametag or not nametag.BG or not nametag.Text then continue end
 				if not ent or not ent.RootPart then nametag.Text.Visible = false; nametag.BG.Visible = false; continue end
+				
 				if DistanceCheck and DistanceCheck.Enabled and DistanceLimit then
 					local dist = getDistance(ent)
 					local min = tonumber(DistanceLimit.ValueMin) or 0
 					local max = tonumber(DistanceLimit.ValueMax) or 256
 					if dist < min or dist > max then nametag.Text.Visible = false; nametag.BG.Visible = false; continue end
 				end
+
 				local now = tick()
 				if ent.Player and ((Equipment and Equipment.Enabled) or (DisplayResource and DisplayResource.Enabled)) then
 					if not ent.LastEquipUpdate or now - ent.LastEquipUpdate >= EQUIPMENT_UPDATE_INTERVAL then
@@ -5745,6 +5755,7 @@ run(function()
 						pcall(Updated.Drawing, ent)
 					end
 				end
+
 				local headPos, headVis
 				local okView = pcall(function()
 					local hipHeight = tonumber(ent.HipHeight) or 0
@@ -5754,6 +5765,7 @@ run(function()
 				nametag.Text.Visible = headVis
 				nametag.BG.Visible = headVis
 				if not headVis then continue end
+
 				if Distance and Distance.Enabled then
 					local mag = getSafeDistance(ent)
 					if Sizes[ent] ~= mag then
@@ -5815,6 +5827,7 @@ run(function()
 		end,
 		Tooltip = 'Renders nametags on entities through walls.'
 	})
+
 	Targets = NameTags:CreateTargets({ Players = true, Function = function() if NameTags.Enabled then NameTags:Toggle(); NameTags:Toggle() end end })
 	FontOption = NameTags:CreateFont({ Name = 'Font', Blacklist = 'Arial', Function = function() if NameTags.Enabled then NameTags:Toggle(); NameTags:Toggle() end end })
 	Color = NameTags:CreateColorSlider({ Name = 'Player Color', Function = function(h, s, v) if NameTags.Enabled and ColorFunc[methodused] then pcall(ColorFunc[methodused], h, s, v) end end })
