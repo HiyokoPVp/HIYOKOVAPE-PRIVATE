@@ -4736,7 +4736,7 @@ ProjectileAura = vape.Categories.Blatant:CreateModule({
 											local shoot = itemMeta.launchSound
 											shoot = shoot and shoot[math.random(1, #shoot)] or nil
 											if shoot then
-												bedwars.SoundManager:playSound(shoot)
+												bedwars.AudioManager:playAudio(shoot)
 											end
 										end
 									end)
@@ -7820,7 +7820,7 @@ run(function()
         if promise and type(promise.andThen) == 'function' then
             promise:andThen(function(suc)
                 if suc then
-                    bedwars.SoundManager:playSound(bedwars.SoundList.BEDWARS_PURCHASE_ITEM)
+                    bedwars.AudioManager:playAudio(bedwars.SoundList.BEDWARS_PURCHASE_ITEM)
                     bedwars.Store:dispatch({
                         type = 'BedwarsAddItemPurchased',
                         itemType = item.itemType
