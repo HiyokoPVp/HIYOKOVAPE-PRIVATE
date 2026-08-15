@@ -92,7 +92,7 @@ local function GetAirTime()
 	return time() - airStart
 end
 
-repeat task.wait() until entitylib.isAlive
+-- repeat task.wait() until entitylib.isAlive
 
 local store = {
     attackReach = 0,
@@ -999,6 +999,8 @@ run(function()
 		end)(),
 		KillEffectMeta = require(replicatedStorage.TS.locker['kill-effect']['kill-effect-meta']).KillEffectMeta,
 		KillFeedController = Flamework.resolveDependency('client/controllers/game/kill-feed/kill-feed-controller@KillFeedController'),
+		SoundList = require(replicatedStorage.TS.sound['game-sound']).GameSound,
+		AudioManager = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).AudioManager,
 		Knit = Knit,
 		KnockbackUtil = require(replicatedStorage.TS.damage['knockback-util']).KnockbackUtil,
 		MageKitUtil = require(replicatedStorage.TS.games.bedwars.kit.kits.mage['mage-kit-util']).MageKitUtil,
@@ -4118,7 +4120,7 @@ run(function()
 			local shoot = bedwars.ItemMeta[item.itemType].projectileSource.launchSound
 			shoot = shoot and shoot[math.random(1, #shoot)] or nil
 			if shoot then
-				bedwars.SoundManager:playSound(shoot)
+				bedwars.AudioManager:playAudio(shoot)
 			end
 		end
 	end
