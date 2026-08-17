@@ -4499,6 +4499,13 @@ run(function()
 		end
 		return vel
 	end
+	-- ★ Custom PredictionオンのときはPrediction.Valueを無視して1を返す
+	local function getEffectivePrediction()
+		if CustomPrediction.Enabled then
+			return 1
+		end
+		return Prediction.Value
+	end
 	local ProjectileAimbot; ProjectileAimbot = vape.Categories.Blatant:CreateModule({
 		Name = 'Projectile Aimbot',
 		Function = function(callback)
@@ -4558,7 +4565,8 @@ run(function()
 							-- ★ ping補正にもCustomPrediction適用
 							targetpos = targetpos + (applyCustomPrediction(v) * ps)
 						end
-						local calc = prediction.SolveTrajectory(newlook.p, projSpeed * Prediction.Value, gravity, targetpos, projmeta.projectile == 'telepearl' and Vector3.zero or newv, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck)
+						-- ★ getEffectivePrediction() で Custom ON時は Prediction.Value を無視
+						local calc = prediction.SolveTrajectory(newlook.p, projSpeed * getEffectivePrediction(), gravity, targetpos, projmeta.projectile == 'telepearl' and Vector3.zero or newv, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck)
 						if calc then
 							targetinfo.Targets[plr] = tick() + 1
 							return {
@@ -4584,8 +4592,7 @@ run(function()
 						Origin = origin
 					})
 					if plr then
-						local targetVel = applyCustomPrediction(plr.RootPart.Velocity)
-						local calc = prediction.SolveTrajectory(origin, 100, 20, plr[TargetPart.Value].Position, targetVel, workspace.Gravity, plr.HipHeight, plr.Jumping and 42.6 or nil)
+						local calc = prediction.SolveTrajectory(origin, 100, 20, plr[TargetPart.Value].Position, applyCustomPrediction(plr.RootPart.Velocity), workspace.Gravity, plr.HipHeight, plr.Jumping and 42.6 or nil)
 						if calc then
 							for i, v in debug.getstack(2) do
 								if v == dir then
@@ -4639,12 +4646,14 @@ run(function()
 		Function = function(callback)
 			if PredictionX and PredictionX.Object then PredictionX.Object.Visible = callback end
 			if PredictionY and PredictionY.Object then PredictionY.Object.Visible = callback end
+			-- ★ 元のPredictionスライダーを非表示にする（Custom Predictionオンのとき）
+			if Prediction and Prediction.Object then Prediction.Object.Visible = not callback end
 		end
 	})
 	-- ★ X (横方向) prediction スライダー
 	PredictionX = ProjectileAimbot:CreateSlider({
 		Name = 'X prediction',
-		Min = 0.1,
+		Min = 0,
 		Max = 2,
 		Default = 1,
 		Decimal = 10,
@@ -4655,7 +4664,7 @@ run(function()
 	-- ★ Y (上下方向) prediction スライダー
 	PredictionY = ProjectileAimbot:CreateSlider({
 		Name = 'Y prediction',
-		Min = 0.1,
+		Min = 0,
 		Max = 2,
 		Default = 1,
 		Decimal = 10,
