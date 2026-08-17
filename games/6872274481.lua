@@ -4488,23 +4488,19 @@ run(function()
 		end
 		return
 	end
-	-- ★ CustomPrediction適用済み速度ベクトルを返すヘルパー
-	local function applyCustomPrediction(vel)
+	-- ★ 修正: Prediction をターゲット速度に適用するヘルパー
+	-- CustomPrediction OFF: Prediction.Value を全方向に均一適用
+	-- CustomPrediction ON:  X/Z → PredictionX.Value, Y → PredictionY.Value
+	local function applyPrediction(vel)
 		if CustomPrediction.Enabled then
 			return Vector3.new(
 				vel.X * PredictionX.Value,
 				vel.Y * PredictionY.Value,
 				vel.Z * PredictionX.Value
 			)
+		else
+			return vel * Prediction.Value
 		end
-		return vel
-	end
-	-- ★ Custom PredictionオンのときはPrediction.Valueを無視して1を返す
-	local function getEffectivePrediction()
-		if CustomPrediction.Enabled then
-			return 1
-		end
-		return Prediction.Value
 	end
 	local ProjectileAimbot; ProjectileAimbot = vape.Categories.Blatant:CreateModule({
 		Name = 'Projectile Aimbot',
@@ -4556,17 +4552,16 @@ run(function()
 						local targetpos = getPosition(plr.Character) or plr[TargetPart.Value].Position
 						local newlook = CFrame.new(offsetpos, targetpos) * CFrame.new(projmeta.projectile == 'owl_projectile' and Vector3.zero or Vector3.new(bedwars.BowConstantsTable.RelX, bedwars.BowConstantsTable.RelY, bedwars.BowConstantsTable.RelZ))
 						local v = plr.RootPart.Velocity
-						local newv = v:Lerp(plr.RootPart.Velocity, 0.5)
-						-- ★ CustomPrediction適用
-						newv = applyCustomPrediction(newv)
+						-- ★ 修正: Prediction をターゲット速度に適用（弾速には掛けない）
+						local predictedVel = applyPrediction(v)
 						pos = entitylib.character.RootPart.Position
 						local ps = math.min(lplr:GetNetworkPing(), 0.5)
 						if ps > 0.06 then
-							-- ★ ping補正にもCustomPrediction適用
-							targetpos = targetpos + (applyCustomPrediction(v) * ps)
+							-- ★ 修正: ping補正にも同じ Prediction 適用済み速度を使う
+							targetpos = targetpos + (predictedVel * ps)
 						end
-						-- ★ getEffectivePrediction() で Custom ON時は Prediction.Value を無視
-						local calc = prediction.SolveTrajectory(newlook.p, projSpeed * getEffectivePrediction(), gravity, targetpos, projmeta.projectile == 'telepearl' and Vector3.zero or newv, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck)
+						-- ★ 修正: projSpeed に Prediction を掛けない。予測速度を第5引数に渡す
+						local calc = prediction.SolveTrajectory(newlook.p, projSpeed, gravity, targetpos, projmeta.projectile == 'telepearl' and Vector3.zero or predictedVel, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck)
 						if calc then
 							targetinfo.Targets[plr] = tick() + 1
 							return {
@@ -4592,7 +4587,8 @@ run(function()
 						Origin = origin
 					})
 					if plr then
-						local calc = prediction.SolveTrajectory(origin, 100, 20, plr[TargetPart.Value].Position, applyCustomPrediction(plr.RootPart.Velocity), workspace.Gravity, plr.HipHeight, plr.Jumping and 42.6 or nil)
+						-- ★ 修正: BlockKicker側も applyPrediction を使う
+						local calc = prediction.SolveTrajectory(origin, 100, 20, plr[TargetPart.Value].Position, applyPrediction(plr.RootPart.Velocity), workspace.Gravity, plr.HipHeight, plr.Jumping and 42.6 or nil)
 						if calc then
 							for i, v in debug.getstack(2) do
 								if v == dir then
@@ -4634,23 +4630,20 @@ run(function()
 	})
 	Prediction = ProjectileAimbot:CreateSlider({
 		Name = 'Prediction',
-		Min = 0.1,
+		Min = 0,
 		Max = 2,
 		Default = 1,
 		Decimal = 10
 	})
-	-- ★ Custom prediction トグル
 	CustomPrediction = ProjectileAimbot:CreateToggle({
 		Name = 'Custom prediction',
 		Tooltip = 'Use separate X (horizontal) and Y (vertical) prediction values',
 		Function = function(callback)
 			if PredictionX and PredictionX.Object then PredictionX.Object.Visible = callback end
 			if PredictionY and PredictionY.Object then PredictionY.Object.Visible = callback end
-			-- ★ 元のPredictionスライダーを非表示にする（Custom Predictionオンのとき）
 			if Prediction and Prediction.Object then Prediction.Object.Visible = not callback end
 		end
 	})
-	-- ★ X (横方向) prediction スライダー
 	PredictionX = ProjectileAimbot:CreateSlider({
 		Name = 'X prediction',
 		Min = 0,
@@ -4659,9 +4652,8 @@ run(function()
 		Decimal = 10,
 		Darker = true,
 		Visible = false,
-		Tooltip = 'Horizontal (sideways) movement prediction'
+		Tooltip = 'Horizontal (X/Z) movement prediction'
 	})
-	-- ★ Y (上下方向) prediction スライダー
 	PredictionY = ProjectileAimbot:CreateSlider({
 		Name = 'Y prediction',
 		Min = 0,
@@ -4670,7 +4662,7 @@ run(function()
 		Decimal = 10,
 		Darker = true,
 		Visible = false,
-		Tooltip = 'Vertical (up/down) movement prediction'
+		Tooltip = 'Vertical (Y) movement prediction'
 	})
 	FOV = ProjectileAimbot:CreateSlider({
 		Name = 'FOV',
