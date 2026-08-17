@@ -4443,6 +4443,9 @@ end)
 	
 run(function()
 	local Prediction
+	local CustomPrediction
+	local PredictionX
+	local PredictionY
 	local AutoCharge
 	local TargetPart
 	local Targets
@@ -4454,24 +4457,20 @@ run(function()
 	rayCheck.FilterType = Enum.RaycastFilterType.Include
 	rayCheck.FilterDescendantsInstances = {workspace:FindFirstChild('Map')}
 	local launchHook, oldd
-
 	local function getMousePosition()
 		if inputService.TouchEnabled then
 			return gameCamera.ViewportSize / 2
 		end
 		return inputService.GetMouseLocation(inputService)
 	end
-
 	local function getPosition(ent, proj)
 		if TargetPart.Value == 'Closest' then
 			local localPosition, magnitude, part = getMousePosition(), 9e9, nil
 			for _, v in ent:GetChildren() do
 				if pcall(function() return v.Position end) then
 					local position, vis = gameCamera.WorldToViewportPoint(gameCamera, v.Position)
-
 					if vis then
 						local mag = (localPosition - Vector2.new(position.x, position.y)).Magnitude
-
 						if mag < magnitude then
 							magnitude = mag
 							part = v
@@ -4487,9 +4486,19 @@ run(function()
 			end
 			return ent.PrimaryPart.Position
 		end
-		return 
+		return
 	end
-	
+	-- ★ CustomPrediction適用済み速度ベクトルを返すヘルパー
+	local function applyCustomPrediction(vel)
+		if CustomPrediction.Enabled then
+			return Vector3.new(
+				vel.X * PredictionX.Value,
+				vel.Y * PredictionY.Value,
+				vel.Z * PredictionX.Value
+			)
+		end
+		return vel
+	end
 	local ProjectileAimbot; ProjectileAimbot = vape.Categories.Blatant:CreateModule({
 		Name = 'Projectile Aimbot',
 		Function = function(callback)
@@ -4506,21 +4515,17 @@ run(function()
 						Sort = sortmethods[Sort.Value or 'Distance'],
 						Origin = entitylib.isAlive and (shootpos or entitylib.character.RootPart.Position) or Vector3.zero
 					})
-	
 					if plr then
 						local pos = shootpos or self:getLaunchPosition(origin)
 						if not pos then
 							return nextLaunch(...)
 						end
-	
 						if (not OtherProjectiles.Enabled) and not projmeta.projectile:find('arrow') then
 							return nextLaunch(...)
 						end
-	
 						if table.find(Blacklist.ListEnabled or {}, ((projmeta.projectile == 'glue_trap' or projmeta.projectile == 'glue_projectile') and 'gloop' or projmeta.projectile)) then
 							return nextLaunch(...)
 						end
-
 						local meta = projmeta:getProjectileMeta()
 						local lifetime = (worldmeta and meta.predictionLifetimeSec or meta.lifetimeSec or 3)
 						local gravity = (meta.gravitationalAcceleration or 196.2) * projmeta.gravityMultiplier
@@ -4528,15 +4533,12 @@ run(function()
 						local offsetpos = pos + (projmeta.projectile == 'owl_projectile' and Vector3.zero or projmeta.fromPositionOffset)
 						local balloons = plr.Character:GetAttribute('InflatedBalloons')
 						local playerGravity = workspace.Gravity
-	
 						if balloons and balloons > 0 then
 							playerGravity = (workspace.Gravity * (1 - ((balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))))
 						end
-	
 						if plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
 							playerGravity = 6
 						end
-	
 						if plr.Player and plr.Player:GetAttribute('IsOwlTarget') then
 							for _, owl in collectionService:GetTagged('Owl') do
 								if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
@@ -4544,15 +4546,17 @@ run(function()
 								end
 							end
 						end
-	
 						local targetpos = getPosition(plr.Character) or plr[TargetPart.Value].Position
 						local newlook = CFrame.new(offsetpos, targetpos) * CFrame.new(projmeta.projectile == 'owl_projectile' and Vector3.zero or Vector3.new(bedwars.BowConstantsTable.RelX, bedwars.BowConstantsTable.RelY, bedwars.BowConstantsTable.RelZ))
 						local v = plr.RootPart.Velocity
 						local newv = v:Lerp(plr.RootPart.Velocity, 0.5)
+						-- ★ CustomPrediction適用
+						newv = applyCustomPrediction(newv)
 						pos = entitylib.character.RootPart.Position
 						local ps = math.min(lplr:GetNetworkPing(), 0.5)
 						if ps > 0.06 then
-							targetpos = targetpos + (v * ps)
+							-- ★ ping補正にもCustomPrediction適用
+							targetpos = targetpos + (applyCustomPrediction(v) * ps)
 						end
 						local calc = prediction.SolveTrajectory(newlook.p, projSpeed * Prediction.Value, gravity, targetpos, projmeta.projectile == 'telepearl' and Vector3.zero or newv, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck)
 						if calc then
@@ -4566,10 +4570,8 @@ run(function()
 							}
 						end
 					end
-	
 					return nextLaunch(...)
 				end)
-
 				bedwars.BlockKickerKitController.getKickBlockProjectileOriginPosition = function(...)
 					local origin, dir = select(2, ...)
 					local plr = entitylib.EntityMouse({
@@ -4581,10 +4583,9 @@ run(function()
 						Sort = sortmethods[Sort.Value or 'Distance'],
 						Origin = origin
 					})
-
 					if plr then
-						local calc = prediction.SolveTrajectory(origin, 100, 20, plr[TargetPart.Value].Position, plr.RootPart.Velocity, workspace.Gravity, plr.HipHeight, plr.Jumping and 42.6 or nil)
-
+						local targetVel = applyCustomPrediction(plr.RootPart.Velocity)
+						local calc = prediction.SolveTrajectory(origin, 100, 20, plr[TargetPart.Value].Position, targetVel, workspace.Gravity, plr.HipHeight, plr.Jumping and 42.6 or nil)
 						if calc then
 							for i, v in debug.getstack(2) do
 								if v == dir then
@@ -4593,7 +4594,6 @@ run(function()
 							end
 						end
 					end
-
 					return oldd(...)
 				end
 			else
@@ -4631,6 +4631,37 @@ run(function()
 		Max = 2,
 		Default = 1,
 		Decimal = 10
+	})
+	-- ★ Custom prediction トグル
+	CustomPrediction = ProjectileAimbot:CreateToggle({
+		Name = 'Custom prediction',
+		Tooltip = 'Use separate X (horizontal) and Y (vertical) prediction values',
+		Function = function(callback)
+			if PredictionX and PredictionX.Object then PredictionX.Object.Visible = callback end
+			if PredictionY and PredictionY.Object then PredictionY.Object.Visible = callback end
+		end
+	})
+	-- ★ X (横方向) prediction スライダー
+	PredictionX = ProjectileAimbot:CreateSlider({
+		Name = 'X prediction',
+		Min = 0.1,
+		Max = 2,
+		Default = 1,
+		Decimal = 10,
+		Darker = true,
+		Visible = false,
+		Tooltip = 'Horizontal (sideways) movement prediction'
+	})
+	-- ★ Y (上下方向) prediction スライダー
+	PredictionY = ProjectileAimbot:CreateSlider({
+		Name = 'Y prediction',
+		Min = 0.1,
+		Max = 2,
+		Default = 1,
+		Decimal = 10,
+		Darker = true,
+		Visible = false,
+		Tooltip = 'Vertical (up/down) movement prediction'
 	})
 	FOV = ProjectileAimbot:CreateSlider({
 		Name = 'FOV',
