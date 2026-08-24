@@ -4665,6 +4665,7 @@ run(function()
     local Range
     local List
     local UsePrediction
+    local PredictionMultiplier -- 予測感度（倍率）用変数
     
     local rayCheck = RaycastParams.new()
     rayCheck.FilterType = Enum.RaycastFilterType.Include
@@ -4730,10 +4731,10 @@ run(function()
                                     
                                     local calc = nil
                                     if UsePrediction.Enabled then
-                                        -- 予測計算ON: 重力と相手の移動速度を考慮
+                                        -- 予測計算ON: 重力と相手の移動速度を考慮 (ProjectileAimbot同様、速度に倍率をかける)
                                         calc = prediction.SolveTrajectory(
                                             pos, 
-                                            projSpeed, 
+                                            projSpeed * PredictionMultiplier.Value, 
                                             gravity, 
                                             ent.RootPart.Position, 
                                             ent.RootPart.Velocity, 
@@ -4756,6 +4757,7 @@ run(function()
                                             local id = httpService:GenerateGUID(true)
                                             local shootPosition = (CFrame.new(pos, calc) * CFrame.new(Vector3.new(-bedwars.BowConstantsTable.RelX, -bedwars.BowConstantsTable.RelY, -bedwars.BowConstantsTable.RelZ))).Position
                                             
+                                            -- 実際の発射速度には倍率をかけず、オリジナルのprojSpeedを使用
                                             bedwars.ProjectileController:createLocalProjectile(meta, ammo, projectile, shootPosition, id, dir * projSpeed, {drawDurationSeconds = 1})
                                             local res = projectileRemote:InvokeServer(item.tool, ammo, projectile, shootPosition, pos, dir * projSpeed, id, {drawDurationSeconds = 1, shotId = httpService:GenerateGUID(false)}, workspace:GetServerTimeNow() - 0.045)
                                             
@@ -4810,6 +4812,16 @@ run(function()
         Name = 'Use Prediction',
         Default = true,
         Tooltip = 'Calculates gravity and target velocity to predict projectile landing spot.'
+    })
+
+    -- ProjectileAimbotと同じ設定の予測倍率スライダー
+    PredictionMultiplier = ProjectileAura:CreateSlider({
+        Name = 'Prediction',
+        Min = 0.1,
+        Max = 2,
+        Default = 1,
+        Decimal = 10,
+        Tooltip = 'Multiplier for projectile speed during prediction calculation.'
     })
 end)
 
