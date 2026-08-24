@@ -106,7 +106,7 @@ local store = {
         },
         hotbar = {}
     },
-    inventories = setmetatable({}, { __mode = "k" }), 
+    inventories = {},
     matchState = 0,
     queueType = 'bedwars_test',
     tools = {},
@@ -769,21 +769,17 @@ run(function()
 						end))
 					end
 
-					local invUpdatePending = {}
-
-					for _, v in updateobjects do
-						table.insert(entity.Connections, v:GetPropertyChangedSignal('Value'):Connect(function()
-							if invUpdatePending[entity] then return end
-							invUpdatePending[entity] = true
-							task.delay(0.1, function()
-								invUpdatePending[entity] = nil
-								if bedwars.getInventory then
-									store.inventories[plr] = bedwars.getInventory(plr)
-									entitylib.Events.EntityUpdated:Fire(entity)
-								end
-							end)
-						end))
-					end
+-- Tinko Vape (entitylib.addEntity内)
+for _, v in updateobjects do
+    table.insert(entity.Connections, v:GetPropertyChangedSignal('Value'):Connect(function()
+        task.delay(0.1, function()
+            if bedwars.getInventory then
+                store.inventories[plr] = bedwars.getInventory(plr)
+                entitylib.Events.EntityUpdated:Fire(entity)
+            end
+        end)
+    end))
+end
 
 					if plr then
 						local anim = char:FindFirstChild('Animate')
