@@ -1,3 +1,6 @@
+print("maybe fixed nametag ig")
+-- hiyokovape on top
+
 local run = function(func)
 	task.wait()
 	xpcall(func, warn)
