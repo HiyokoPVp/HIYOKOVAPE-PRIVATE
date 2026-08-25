@@ -17689,3 +17689,96 @@ run(function()
         end
     })
 end)
+
+run(function()
+    local ZephyrSpeed
+    local Speed1, Speed2, Speed3, Speed4, Speed5
+    local lastNotifyTick = 0
+
+    local function getWindWalkerStack()
+        local ok, text = pcall(function()
+            return lplr.PlayerGui
+                .StatusEffectHudScreen.StatusEffectHud.WindWalkerEffect.EffectStack.Text
+        end)
+        if not ok or not text then
+            return nil
+        end
+        return tonumber(text)
+    end
+
+    ZephyrSpeed = vape.Categories.Kit:CreateModule({
+        Name = 'ZephyrSpeed',
+        Function = function(callback)
+            if callback then
+                ZephyrSpeed:Clean(runService.PreSimulation:Connect(function(dt)
+                    if not entitylib.isAlive or not isnetworkowner(entitylib.character.RootPart) then return end
+
+                    local stack = getWindWalkerStack()
+
+                    if stack == nil then
+                        if tick() - lastNotifyTick > 5 then
+                            lastNotifyTick = tick()
+                            notif('ZephyrSpeed', 'UseZephyrKit', 5, 'alert')
+                        end
+                        return
+                    end
+
+                    if stack == 0 then return end
+
+                    local speedValue
+                    if stack == 1 then speedValue = Speed1.Value
+                    elseif stack == 2 then speedValue = Speed2.Value
+                    elseif stack == 3 then speedValue = Speed3.Value
+                    elseif stack == 4 then speedValue = Speed4.Value
+                    elseif stack >= 5 then speedValue = Speed5.Value
+                    else return end
+
+                    if speedValue <= 0 then return end
+
+                    local root, velo = entitylib.character.RootPart, getSpeed()
+                    local moveDirection = entitylib.character.Humanoid.MoveDirection
+                    local destination = (moveDirection * math.max(speedValue - velo, 0) * dt)
+                    root.CFrame += destination
+                    root.AssemblyLinearVelocity = (moveDirection * velo) + Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+                end))
+            end
+        end,
+        Tooltip = 'Speed based on WindWalker stack count\nRequires Zephyr kit'
+    })
+
+    Speed1 = ZephyrSpeed:CreateSlider({
+        Name = 'Stack 1 Speed',
+        Min = 0,
+        Max = 50,
+        Default = 24,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    })
+    Speed2 = ZephyrSpeed:CreateSlider({
+        Name = 'Stack 2 Speed',
+        Min = 0,
+        Max = 50,
+        Default = 24,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    })
+    Speed3 = ZephyrSpeed:CreateSlider({
+        Name = 'Stack 3 Speed',
+        Min = 0,
+        Max = 50,
+        Default = 24,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    })
+    Speed4 = ZephyrSpeed:CreateSlider({
+        Name = 'Stack 4 Speed',
+        Min = 0,
+        Max = 50,
+        Default = 24,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    })
+    Speed5 = ZephyrSpeed:CreateSlider({
+        Name = 'Stack 5 Speed',
+        Min = 0,
+        Max = 50,
+        Default = 50,
+        Suffix = function(val) return val == 1 and 'stud' or 'studs' end
+    })
+end)
