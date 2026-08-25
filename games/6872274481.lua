@@ -17621,3 +17621,71 @@ run(function()
 		end
 	})
 end)
+
+run(function()
+    local DinoSpeed
+    local SpeedValue
+    local InvisDino
+
+    DinoSpeed = vape.Categories.AntiCheat:CreateModule({
+        Name = 'DinoSpeed',
+        Function = function(callback)
+            if callback then
+                -- Dino Speed (bedwars movement method)
+                DinoSpeed:Clean(runService.PreSimulation:Connect(function(dt)
+                    if not entitylib.isAlive then return end
+                    local char = lplr.Character
+                    if not char or not char:FindFirstChild("dino") then return end
+
+                    local root = entitylib.character.RootPart
+                    if not root or not isnetworkowner(root) then return end
+
+                    local velo = getSpeed()
+                    local moveDirection = entitylib.character.Humanoid.MoveDirection
+                    local destination = (moveDirection * math.max(SpeedValue.Value - velo, 0) * dt)
+                    root.CFrame += destination
+                    root.AssemblyLinearVelocity = (moveDirection * velo) + Vector3.new(0, root.AssemblyLinearVelocity.Y, 0)
+                end))
+
+                -- InvisDino (local transparency)
+                if InvisDino.Enabled then
+                    DinoSpeed:Clean(runService.RenderStepped:Connect(function()
+                        local char = lplr.Character
+                        if not char then return end
+                        local dino = char:FindFirstChild("dino")
+                        if not dino then return end
+                        for _, obj in ipairs(dino:GetDescendants()) do
+                            if obj:IsA("BasePart") then
+                                obj.LocalTransparencyModifier = 1
+                            elseif obj:IsA("Decal") or obj:IsA("Texture") then
+                                obj.LocalTransparencyModifier = 1
+                            end
+                        end
+                    end))
+                end
+            end
+        end,
+        Tooltip = 'Speed hack while mounted on dino\nUses bedwars CFrame movement method'
+    })
+
+    SpeedValue = DinoSpeed:CreateSlider({
+        Name = 'Speed',
+        Min = 0,
+        Max = 45,
+        Default = 45,
+        Suffix = function(val)
+            return val == 1 and 'stud' or 'studs'
+        end
+    })
+
+    InvisDino = DinoSpeed:CreateToggle({
+        Name = 'InvisDino',
+        Tooltip = 'Makes the dino model invisible locally',
+        Function = function()
+            if DinoSpeed.Enabled then
+                DinoSpeed:Toggle()
+                DinoSpeed:Toggle()
+            end
+        end
+    })
+end)
