@@ -3657,6 +3657,233 @@ run(function()
 	local RangeVisualiser, VisualiserColor
 	local HighHitreg, HitregMode, AttackSpeedFloor, ContinueSwing, ShowGhostStats
 
+    -- ============================================================
+    -- [FASTHITS] CATVAPE port : state + helpers
+    -- ============================================================
+    local FastHits, FHWhitelist, FireRateDelay, SwitchDelay, LegitSwitch
+    local UseSophia, UseWhim, UseNazar, UseUmeko, UseLasso
+    local FireRates = {}
+    local FastHitPending, LastShot = false, 0
+    local ProjectileIndex = 1
+    local FHProjectileRemote = {InvokeServer = function() end}
+    local FHArcCheck = RaycastParams.new()
+    FHArcCheck.FilterType = Enum.RaycastFilterType.Exclude
+
+    task.spawn(function()
+        local ok, r = pcall(function() return bedwars.Client:Get(remotes.FireProjectile) end)
+        if ok and r then FHProjectileRemote = r.instance or r end
+    end)
+
+    local function FHGetAmmo(source)
+        if not source.ammoItemTypes or #source.ammoItemTypes == 0 then return nil end
+        for _, item in store.inventory.inventory.items do
+            if table.find(source.ammoItemTypes, item.itemType) then return item.itemType end
+        end
+        return nil
+    end
+
+    local function FHMatches(list, names)
+        if not list or #list == 0 then return true end
+        for _, entry in list do
+            local needle = tostring(entry):lower():gsub('[_%s]+', ' ')
+            if #needle > 0 then
+                for _, name in names do
+                    if name then
+                        name = tostring(name):lower():gsub('[_%s]+', ' ')
+                        if name == needle or (' '..name):find(' '..needle, 1, true) then return true end
+                    end
+                end
+            end
+        end
+        return false
+    end
+
+    local function FHSophiaSource(itemType)
+        if itemType ~= 'frost_staff_3' and itemType ~= 'frost_staff_2' and itemType ~= 'frost_staff_1' then return nil end
+        local ctrl = bedwars.FrostyGunController
+        if not ctrl then return nil end
+        local mode = bedwars.FrostyGunMode
+        if mode and ctrl.projectileMode ~= mode.PROJECTILE then return nil end
+        return itemMeta(itemType).projectileSource
+    end
+
+    local function FHWhimSource(itemType)
+        if itemType ~= 'mage_spellbook' then return nil end
+        local util = bedwars.MageKitUtil
+        local elements = util and util.MageElementMeta
+        if not elements then return nil end
+        local cycle = bedwars.BalanceFile and bedwars.BalanceFile.MAGE_ELEMENT_CYCLE
+        local element = cycle and cycle[(lplr:GetAttribute('MageElementIndex') or 0) + 1] or 'BASE'
+        local meta = elements[element] or elements.BASE
+        return meta and meta.projectileSource
+    end
+
+    local function FHNazarSource(itemType)
+        if itemType ~= 'life_bow' and itemType ~= 'life_crossbow' and itemType ~= 'life_headhunter' then return nil end
+        return itemMeta(itemType).projectileSource
+    end
+
+    local function FHUmekoSource(itemType)
+        if not itemType:match('^ninja_chakram_%d+$') then return nil end
+        local ctrl = bedwars.ChakramController
+        if ctrl and ctrl.chakramIsLaunched then return nil end
+        return itemMeta(itemType).projectileSource
+    end
+
+    local function FHGetShots()
+        local shots = {}
+        local list = FHWhitelist and FHWhitelist.ListEnabled or {}
+        for _, item in store.inventory.inventory.items do
+            local meta = itemMeta(item.itemType)
+            local source = (UseSophia and UseSophia.Enabled and FHSophiaSource(item.itemType))
+                or (UseWhim and UseWhim.Enabled and FHWhimSource(item.itemType))
+                or (UseNazar and UseNazar.Enabled and FHNazarSource(item.itemType))
+                or (UseUmeko and UseUmeko.Enabled and FHUmekoSource(item.itemType))
+                or meta.projectileSource
+            if source and type(source.projectileType) == 'function' then
+                local ammo
+                if source.ammoItemTypes and #source.ammoItemTypes > 0 then
+                    ammo = FHGetAmmo(source)
+                else
+                    ammo = item.itemType
+                end
+                if ammo and FHMatches(list, {ammo, item.itemType, meta.displayName}) then
+                    local ok, proj = pcall(source.projectileType, ammo)
+                    if ok and type(proj) == 'string' then
+                        table.insert(shots, {item, ammo, proj, source})
+                    end
+                end
+            end
+        end
+        if UseLasso and UseLasso.Enabled then
+            local lasso = getItem('lasso')
+            local source = lasso and itemMeta('lasso').projectileSource
+            if source then
+                local found = false
+                for _, v in shots do if v[1].itemType == 'lasso' then found = true break end end
+                if not found then
+                    local ok, proj = pcall(source.projectileType, 'lasso')
+                    table.insert(shots, {lasso, 'lasso', (ok and proj) or 'lasso_projectile', source})
+                end
+            end
+        end
+        return shots
+    end
+
+    local function FHShotData(itemType)
+        local source = itemMeta(itemType).projectileSource
+        local id
+        if bedwars.IdUtil and type(bedwars.IdUtil.generateId) == 'function' then
+            id = bedwars.IdUtil.generateId(8)
+        else
+            id = httpService:GenerateGUID(false)
+        end
+        local draw = math.max(1, source and source.maxStrengthChargeSec or 0)
+        return id, {shotId = httpService:GenerateGUID(false), drawDurationSeconds = draw, drawDurationSec = draw}
+    end
+
+    local function FHPlaySound(source)
+        if not source then return end
+        local launch = source.launchSound
+        if launch and #launch > 0 and bedwars.AudioManager then
+            pcall(function()
+                bedwars.AudioManager:playAudio(launch[math.random(1, #launch)], {
+                    volumeMultiplier = (source.launchSoundConfig and source.launchSoundConfig.volumeMultiplier) or 1
+                })
+            end)
+        end
+    end
+
+    local function FHFire(ent, sendPosition)
+        if not FastHits or not FastHits.Enabled then return end
+        if FastHitPending or tick() <= LastShot then return end
+        if not ent or not ent.RootPart or not ent.Character then return end
+
+        local shots = FHGetShots()
+        if #shots == 0 then return end
+        ProjectileIndex += 1
+        if not shots[ProjectileIndex] then ProjectileIndex = 1 end
+
+        local item, ammo, projectile, source = unpack(shots[ProjectileIndex])
+        local pm = bedwars.ProjectileMeta and bedwars.ProjectileMeta[projectile]
+        if not pm or type(pm.launchVelocity) ~= 'number' then return end
+        if tick() <= (FireRates[item.itemType] or 0) then return end
+
+        local speed = pm.launchVelocity
+        local gravity = pm.gravitationalAcceleration or 196.2
+        local oldHotbar, oldTool = store.inventory.hotbarSlot, store.hand.tool
+        local hotbar = getHotbar(item.tool)
+        local bc = bedwars.BowConstantsTable or {}
+
+        if hotbar then
+            switchItem(item.tool, 0.1)
+            if LegitSwitch and LegitSwitch.Enabled then
+                hotbarSwitch(hotbar)
+            end
+        end
+        if SwitchDelay and SwitchDelay.Value > 0 then
+            task.wait(SwitchDelay.Value)
+        end
+        if not entitylib.isAlive or not ent.RootPart.Parent then return end
+
+        local rootPos = ent.RootPart.Position
+        local shootPos = (CFrame.new(sendPosition, rootPos) * CFrame.new(Vector3.new(-(bc.RelX or 0), -(bc.RelY or 0), -(bc.RelZ or 0)))).Position
+        local vel = ent.RootPart.AssemblyLinearVelocity
+        local airborne = (ent.Humanoid and ent.Humanoid.FloorMaterial == Enum.Material.Air) or math.abs(vel.Y) > 0.01
+
+        local aim, _, travel = prediction.SolveTrajectory(
+            shootPos, speed, gravity, rootPos, vel, workspace.Gravity,
+            ent.HipHeight, ent.Jumping and 42.6 or nil, nil, airborne, rootPos, ent.RootPart, nil, true
+        )
+        if not aim then
+            aim = prediction.SolveTrajectory(shootPos, speed, gravity, rootPos, vel, workspace.Gravity, ent.HipHeight, ent.Jumping and 42.6 or nil)
+            travel = nil
+        end
+
+        local clear = true
+        if aim and travel and type(prediction.IsTrajectoryClear) == 'function' then
+            local ignore = {gameCamera, lplr.Character}
+            for _, e in entitylib.List do
+                if e.Character then table.insert(ignore, e.Character) end
+            end
+            FHArcCheck.FilterDescendantsInstances = ignore
+            local ok, res = pcall(prediction.IsTrajectoryClear, shootPos, aim - shootPos, gravity, travel, FHArcCheck)
+            clear = ok and res or true
+        end
+
+        if aim and clear then
+            local dir = CFrame.lookAt(shootPos, aim).LookVector
+            local shotId, shotData = FHShotData(item.itemType)
+            FastHitPending = true
+            FireRates[item.itemType] = tick() + (source.fireDelaySec or 0.1)
+            LastShot = tick() + (FireRateDelay and FireRateDelay.Value or 0.05)
+            targetinfo.Targets[ent] = tick() + 1
+
+            if type(prediction.trackShot) == 'function' then pcall(prediction.trackShot, ent.RootPart) end
+            pcall(function()
+                bedwars.ProjectileController:createLocalProjectile(pm, ammo, projectile, shootPos, shotId, dir * speed, shotData)
+            end)
+
+            task.spawn(function()
+                local ok, res = pcall(function()
+                    return FHProjectileRemote:InvokeServer(
+                        item.tool, ammo, projectile, shootPos, sendPosition, dir * speed, shotId, shotData,
+                        workspace:GetServerTimeNow() - ((store.ping and store.ping.total or 0) / 10)
+                    )
+                end)
+                FastHitPending = false
+                if ok and res then FHPlaySound(source) end
+            end)
+        end
+
+        if oldTool then switchItem(oldTool) end
+        if LegitSwitch and LegitSwitch.Enabled and oldHotbar then
+            task.spawn(function() hotbarSwitch(oldHotbar) end)
+        end
+    end
+    -- ============================================================
+    -- [FASTHITS END]
+    -- ============================================================
 	local Particles, Boxes = {}, {}
 	local anims, AnimDelay, AnimTween, armC0 = vape.Libraries.auraanims, tick()
 	local Attacking = false
@@ -4291,6 +4518,10 @@ run(function()
 													selfPosition = {value = hp}
 												}
 											})
+											-- [FASTHITS] fire a projectile alongside the sword hit
+											if FastHits and FastHits.Enabled then
+											    task.spawn(FHFire, v, pos)
+											end
 											RetryAt = 0
 											if tracked and not retry and stock and high and ConfirmMin and tick() < RetryUntil then
 												local w = ConfirmMin + T.Spread + T.RetryMargin
@@ -4553,6 +4784,61 @@ run(function()
 		end
 	end})
 	VisualiserColor = Killaura:CreateColorSlider({Name = 'Visualiser Color', DefaultOpacity = 0.5, Function = function() updateVisualiser() end})
+
+    -- ============================================================
+    -- [FASTHITS] options
+    -- ============================================================
+    FastHits = Killaura:CreateToggle({
+        Name = 'Fast Hits',
+        Function = function(callback)
+            if FHWhitelist then FHWhitelist.Object.Visible = callback end
+            if FireRateDelay then FireRateDelay.Object.Visible = callback end
+            if SwitchDelay then SwitchDelay.Object.Visible = callback end
+            if LegitSwitch then LegitSwitch.Object.Visible = callback end
+            if UseSophia then UseSophia.Object.Visible = callback end
+            if UseWhim then UseWhim.Object.Visible = callback end
+            if UseNazar then UseNazar.Object.Visible = callback end
+            if UseUmeko then UseUmeko.Object.Visible = callback end
+            if UseLasso then UseLasso.Object.Visible = callback end
+            if not callback then
+                FastHitPending = false
+                LastShot = 0
+                table.clear(FireRates)
+            end
+        end,
+        Default = false,
+        Tooltip = 'Deals more damage quicker using projectiles between sword hits'
+    })
+    FHWhitelist = Killaura:CreateTextList({
+        Name = 'Projectiles',
+        Default = {'arrow', 'snowball'},
+        Darker = true,
+        Visible = false,
+        Placeholder = 'projectile',
+        Tooltip = 'Ammo / item / display names used for fast hits, empty uses everything'
+    })
+    FireRateDelay = Killaura:CreateSlider({
+        Name = 'Fire Rate Delay',
+        Min = 0, Max = 2, Decimal = 100, Default = 0.05,
+        Darker = true, Visible = false, Suffix = 'seconds',
+        Tooltip = 'Extra gap between two shots, on top of the items own fire delay'
+    })
+    SwitchDelay = Killaura:CreateSlider({
+        Name = 'Switch Delay',
+        Min = 0, Max = 1, Decimal = 100, Default = 0.02,
+        Darker = true, Visible = false, Suffix = 'seconds',
+        Tooltip = 'Wait after swapping onto the projectile so the server registers the hand change'
+    })
+    LegitSwitch = Killaura:CreateToggle({
+        Name = 'Legit Switch',
+        Darker = true, Visible = false, Default = false,
+        Tooltip = 'Visibly moves through the hotbar slot instead of silently equipping, and puts your old slot back'
+    })
+    UseSophia = Killaura:CreateToggle({Name = 'Use sophia', Darker = true, Visible = false, Tooltip = "Also shoots sophia's frost staff when it is out of mist mode"})
+    UseWhim = Killaura:CreateToggle({Name = 'Use whim', Darker = true, Visible = false, Tooltip = "Also casts whim's magic book, follows your cycled element"})
+    UseNazar = Killaura:CreateToggle({Name = 'Use nazar', Darker = true, Visible = false, Tooltip = "Also shoots nazar's life bow, crossbow and headhunter"})
+    UseUmeko = Killaura:CreateToggle({Name = 'Use umeko', Darker = true, Visible = false, Tooltip = "Also throws umeko's chakram, waiting for it to come back"})
+    UseLasso = Killaura:CreateToggle({Name = 'Use Lasso', Darker = true, Visible = false, Tooltip = "Also throws lassy's lasso"})
 end)
 	
 run(function()
