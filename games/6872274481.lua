@@ -3798,6 +3798,11 @@ run(function()
         if not FastHits or not FastHits.Enabled then return end
         if FastHitPending or tick() <= LastShot then return end
         if not ent or not ent.RootPart or not ent.Character then return end
+        if typeof(sendPosition) ~= 'Vector3' then
+        	local myroot = entitylib.isAlive and entitylib.character and entitylib.character.RootPart
+        	if not myroot then return end
+        	sendPosition = myroot.Position
+        end
 
         local shots = FHGetShots()
         if #shots == 0 then return end
@@ -3815,11 +3820,9 @@ run(function()
         local hotbar = getHotbar(item.tool)
         local bc = bedwars.BowConstantsTable or {}
 
-        if hotbar then
-            switchItem(item.tool, 0.1)
-            if LegitSwitch and LegitSwitch.Enabled then
-                hotbarSwitch(hotbar)
-            end
+        switchItem(item.tool, 0.1)
+        if hotbar and LegitSwitch and LegitSwitch.Enabled then
+        	hotbarSwitch(hotbar)
         end
         if SwitchDelay and SwitchDelay.Value > 0 then
             task.wait(SwitchDelay.Value)
@@ -4520,7 +4523,13 @@ run(function()
 											})
 											-- [FASTHITS] fire a projectile alongside the sword hit
 											if FastHits and FastHits.Enabled then
-											    task.spawn(FHFire, v, pos)
+											    task.spawn(function()
+											    	local ok, err = pcall(FHFire, v)
+											    	if not ok and tick() > (getgenv().FHWarnAt or 0) then
+											    		getgenv().FHWarnAt = tick() + 5
+											    		warn('[FastHits] ' .. tostring(err))
+											    	end
+											    end)
 											end
 											RetryAt = 0
 											if tracked and not retry and stock and high and ConfirmMin and tick() < RetryUntil then
