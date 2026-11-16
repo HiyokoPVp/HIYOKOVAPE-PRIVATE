@@ -58,6 +58,28 @@ local assetfunction = getcustomasset
 
 local vape = shared.vape
 
+-- ==== [FIX] category resolver ====
+local function resolveCategory(...)
+	for _, name in {...} do
+		local ok, cat = pcall(function() return vape.Categories[name] end)
+		if ok and type(cat) == 'table' and type(cat.CreateModule) == 'function' then return cat end
+	end
+	for _, cat in vape.Categories do
+		if type(cat) == 'table' and type(cat.CreateModule) == 'function' then return cat end
+	end
+	local o = {Enabled=false, Value=0, Object={Visible=false}, ListEnabled={}, List={}, Hue=0, Sat=0, Opacity=1,
+		ValueMin=0, ValueMax=0, GetRandomValue=function() return 0 end, Toggle=function() end, SetValue=function() end, Change=function() end}
+	local m = {Enabled=false, Options={}, Children=Instance.new('Frame'), Clean=function() end, Toggle=function() end,
+		SetBind=function() end, SetHighlight=function() end, AddHUD=function() end, Share=function() end,
+		CreateToggle=function() return o end, CreateSlider=function() return o end, CreateDropdown=function() return o end,
+		CreateTextList=function() return o end, CreateTextBox=function() return o end, CreateColorSlider=function() return o end,
+		CreateTwoSlider=function() return o end, CreateTargets=function() return o end, CreateFont=function() return o end,
+		CreateButton=function() return o end, CreateHotbarList=function() return o end}
+	return {CreateModule=function() return m end, Modules={}, Options={}}
+end
+getgenv().resolveCategory = resolveCategory
+-- ==== [FIX END] ====
+
 local entitylib = vape.Libraries.entity
 local targetinfo = vape.Libraries.targetinfo
 local sessioninfo = vape.Libraries.sessioninfo
@@ -124,12 +146,17 @@ local store = {
 	terraStompTime = 0,
 	terraKickTime = 0,
 }
+store.equippedKits = store.equippedKits or {}
+store.ping = store.ping or {}
+store.hitchance = store.hitchance or {}
+store.swordSpeeds = store.swordSpeeds or {}
+store.selfProjectiles = store.selfProjectiles or {}
+function store.hasKit(id) return table.find(store.equippedKits or {}, id) ~= nil end
 getgenv().store = store
 local Reach = {}
 local HitBoxes = {}
 local TrapDisabler
 local AntiFallPart
-local InfiniteFly = {}
 local bedwars, remotes, sides, oldinvrender, oldSwing = {}, {}, {}
 local originalKnit
 local function getAccountTier(player)
@@ -222,7 +249,8 @@ local function getBow()
 		local _bowItemMeta = bedwars.ItemMeta[item.itemType]
         local bowMeta = _bowItemMeta and _bowItemMeta.projectileSource
 		if bowMeta and table.find(bowMeta.ammoItemTypes, 'arrow') then
-			local bowDamage = bedwars.ProjectileMeta[bowMeta.projectileType('arrow')].combat.damage or 0
+			local pm = bedwars.ProjectileMeta and bedwars.ProjectileMeta[bowMeta.projectileType('arrow')]
+			local bowDamage = pm and pm.combat and pm.combat.damage or 0
 			if bowDamage > bestBowDamage then
 				bestBow, bestBowSlot, bestBowDamage = item, slot, bowDamage
 			end
@@ -249,7 +277,33 @@ local function GetItems(item: string): table
 end;
 
 local function getRoactRender(func)
-	return debug.getupvalue(debug.getupvalue(debug.getupvalue(func, 3).render, 2).render, 1)
+	if type(func) ~= 'function' then return nil end
+	local function chain(f, i, j)
+		local a = safeUpvalue(f, i)
+		if type(a) ~= 'table' or type(a.render) ~= 'function' then return nil end
+		local b = safeUpvalue(a.render, j)
+		if type(b) ~= 'table' or type(b.render) ~= 'function' then return nil end
+		return safeUpvalue(b.render, 1)
+	end
+	local r = chain(func, 3, 2)
+	if r ~= nil then return r end
+	for i = 1, 48 do
+		local ok, name, v = pcall(debug.getupvalue, func, i)
+		if not ok or name == nil then break end
+		if type(v) == 'table' and rawget(v, '__componentName') and type(v.render) == 'function' then
+			for j = 1, 48 do
+				r = chain(func, i, j)
+				if r ~= nil then return r end
+			end
+		end
+	end
+	for i = 1, 32 do
+		for j = 1, 32 do
+			r = chain(func, i, j)
+			if r ~= nil then return r end
+		end
+	end
+	return nil
 end
 
 local function getSword()
@@ -346,6 +400,46 @@ local function getNearGround(range)
 	table.clear(blocks)
 	return closest
 end
+
+-- ==== [FIX] safe wrappers & missing globals ====
+local function safeUpvalue(func, index)
+	if type(func) ~= 'function' then return nil end
+	local ok, val = pcall(debug.getupvalue, func, index)
+	return ok and val or nil
+end
+local function findUpvalueTable(func, validator, maxIndex)
+	if type(func) ~= 'function' then return nil end
+	for i = 1, (maxIndex or 64) do
+		local ok, name, val = pcall(debug.getupvalue, func, i)
+		if not ok or name == nil then break end
+		if type(val) == 'table' and (not validator or validator(val)) then return val end
+	end
+	return nil
+end
+local lagConnections = {}
+local lastUpdate = setmetatable({}, {__mode = 'k'})
+local kitImageIds = {none = ''}
+local AntiVoidPart = nil
+local ViewMode = {Value = 'Third Person'}
+local function canDebug()
+	return type(debug) == 'table' and type(debug.getconstants) == 'function'
+end
+local function itemMeta(itemType)
+	local m = bedwars and bedwars.ItemMeta
+	return (m and itemType and m[itemType]) or {}
+end
+local function getHotbar(tool)
+	if not tool then return nil end
+	for i, v in store.inventory.hotbar do
+		if v.item and (v.item.tool == tool or v.item.itemType == (tool.Name or tool)) then
+			return i - 1
+		end
+	end
+	return nil
+end
+getgenv().getHotbar = getHotbar
+getgenv().itemMeta = itemMeta
+-- ==== [FIX END] ====
 
 local function getShieldAttribute(char)
 	local returned = 0
@@ -900,26 +994,137 @@ end
 	end
 	vape:Clean(entitylib.Events.LocalAdded:Connect(updateVelocity))
 end)
+if not entitylib.getEntity then
+	entitylib.getEntity = function(obj)
+		if typeof(obj) ~= 'Instance' then return nil end
+		for _, v in entitylib.List do
+			if v.Character == obj or v.Player == obj then return v end
+		end
+		return nil
+	end
+end
+if not entitylib.isVulnerable then
+	entitylib.isVulnerable = function(ent) return (ent and ent.Health and ent.Health > 0) and true or false end
+end
+if not entitylib.AllPosition then
+	entitylib.AllPosition = function(opt)
+		local res = {}
+		local origin = opt.Origin or (entitylib.character and entitylib.character.RootPart.Position)
+		if not origin then return res end
+		for _, v in entitylib.List do
+			if v.RootPart and v.Targetable and ((v.Player and opt.Players) or ((not v.Player) and opt.NPCs)) then
+				if (v.RootPart.Position - origin).Magnitude <= (opt.Range or 20) then table.insert(res, v) end
+			end
+		end
+		table.sort(res, function(a, b) return (a.RootPart.Position - origin).Magnitude < (b.RootPart.Position - origin).Magnitude end)
+		if opt.Limit then while #res > opt.Limit do table.remove(res) end end
+		return res
+	end
+end
+
 entitylib.start()
 
 run(function()
-	local KnitInit, Knit
+	-- [FIX] Knit: canDebug + KnitClient fallback + upvalue scan
+	getgenv().canDebug = (function()
+		local ok, name = pcall(identifyexecutor)
+		if ok and type(name) == 'string' and table.find({'Solara', 'Xeno'}, name) then return false end
+		return type(debug) == 'table' and type(debug.getupvalue) == 'function' and type(debug.getconstants) == 'function'
+	end)()
+
+	local KnitInit, Knit, knitModule
 	repeat
 		KnitInit, Knit = pcall(function()
-			return debug.getupvalue(require(lplr.PlayerScripts.TS.knit).setup, 9)
+			if not canDebug then
+				return require(replicatedStorage.rbxts_include.node_modules['@easy-games'].knit.src).KnitClient
+			end
+			knitModule = knitModule or require(lplr.PlayerScripts.TS.knit)
+			local setup = knitModule and knitModule.setup
+			local k = safeUpvalue(setup, 9)
+			if type(k) == 'table' and type(k.Controllers) == 'table' then return k end
+			for i = 1, 48 do
+				local v = safeUpvalue(setup, i)
+				if type(v) == 'table' and type(v.Controllers) == 'table' then return v end
+			end
+			local ok, KC = pcall(function()
+				return require(replicatedStorage.rbxts_include.node_modules['@easy-games'].knit.src).KnitClient
+			end)
+			if ok and type(KC) == 'table' and type(KC.Controllers) == 'table' then return KC end
+			return nil
 		end)
-		if KnitInit then break end
-		task.wait()
-	until KnitInit
+		if KnitInit and Knit then break end
+		KnitInit, Knit = false, nil
+		task.wait(0.25)
+	until Knit
+	getgenv().Knit = Knit
 
-	if not debug.getupvalue(Knit.Start, 1) then
-		repeat task.wait() until debug.getupvalue(Knit.Start, 1)
+	if canDebug and type(Knit.Start) == 'function' and not safeUpvalue(Knit.Start, 1) then
+		local t0 = tick()
+		repeat task.wait() until safeUpvalue(Knit.Start, 1) or tick() - t0 > 30
 	end
 
-	local Flamework = require(replicatedStorage['rbxts_include']['node_modules']['@flamework'].core.out).Flamework
-	local InventoryUtil = require(replicatedStorage.TS.inventory['inventory-util']).InventoryUtil
-	local Client = require(replicatedStorage.TS.remotes).default.Client
+	local function tryRequire(fn, fallback)
+		local ok, res = pcall(fn)
+		if ok and res ~= nil then return res end
+		return fallback
+	end
+	local Flamework = tryRequire(function()
+		return require(replicatedStorage['rbxts_include']['node_modules']['@flamework'].core.out).Flamework
+	end, {resolveDependency = function() return nil end})
+	local InventoryUtil = tryRequire(function()
+		return require(replicatedStorage.TS.inventory['inventory-util']).InventoryUtil
+	end, nil)
+	local Remotes = tryRequire(function() return require(replicatedStorage.TS.remotes).default end, nil)
+	local Client = Remotes and Remotes.Client
+	if not Client then warn('[fix] remotes Client missing') return end
 	local OldGet, OldBreak = Client.Get
+
+	local failedRequires = {}
+	local function safeRequire(name, fn)
+		local ok, res = pcall(fn)
+		if ok and res ~= nil then return res end
+		table.insert(failedRequires, name)
+		return nil
+	end
+
+	local RemoteHandler = {CachedRemotes = {}}
+	RemoteHandler.__index = RemoteHandler
+	local function GetRemote(id)
+		local ok, r = pcall(Client.GetOrThrow, Client, id)
+		if ok and r then return r end
+		local ok2, r2 = pcall(function() return Client:Get(id) end)
+		return ok2 and r2 or nil
+	end
+	function RemoteHandler.Get(self, id)
+		if RemoteHandler.CachedRemotes[id] then return RemoteHandler.CachedRemotes[id] end
+		local remote = setmetatable({ID = id, RequestsInLastMinute = 0, MaxRequestsPerMinute = 300, LastRateLimitReset = 0}, RemoteHandler)
+		local ok, r = pcall(GetRemote, id)
+		remote.Success, remote.Remote = ok, (ok and r or nil)
+		RemoteHandler.CachedRemotes[id] = remote
+		return remote
+	end
+	function RemoteHandler:ResetRateLimit()
+		self.RequestsInLastMinute = 0
+		self.LastRateLimitReset = os.clock()
+	end
+	function RemoteHandler:GetCurrentRequests() return self.RequestsInLastMinute end
+	function RemoteHandler:IncrementRequests() self.RequestsInLastMinute += 1 end
+	function RemoteHandler:GetRateLimit() return self.MaxRequestsPerMinute end
+	function RemoteHandler:Fire(method, ...)
+		local r = self.Remote
+		local noop
+		noop = {andThen = function() return noop end, catch = function() return noop end, await = function() return nil end}
+		if not self.Success or not r then return noop end
+		if (os.clock() - self.LastRateLimitReset) >= 60 then self:ResetRateLimit() end
+		if self:GetCurrentRequests() >= self:GetRateLimit() then return noop end
+		self:IncrementRequests()
+		local call = (method and r[method]) or r.CallServer or r.CallServerAsync or r.SendToServer
+		if call then
+			local ok, res = pcall(call, r, ...)
+			if ok and res ~= nil then return res end
+		end
+		return noop
+	end
 
 	local rakNet = false
 	run(function()
@@ -927,56 +1132,71 @@ run(function()
 	end)
 
 	bedwars = setmetatable({
-		RankMeta = require(replicatedStorage.TS.rank['rank-meta']).RankMeta,
-        BalanceFile = require(replicatedStorage.TS.balance["balance-file"]).BalanceFile,
-        ClientSyncEvents = require(lplr.PlayerScripts.TS['client-sync-events']).ClientSyncEvents,
-        SyncEventPriority = require(replicatedStorage.rbxts_include.node_modules['@easy-games']['sync-event'].out),
-		AbilityId = require(replicatedStorage.TS.ability['ability-id']).AbilityId,
-        IdUtil = require(replicatedStorage.TS.util['id-util']).IdUtil,
-		BlockSelector = require(game:GetService("ReplicatedStorage").rbxts_include.node_modules["@easy-games"]["block-engine"].out.client.select["block-selector"]).BlockSelector,
+		RankMeta = safeRequire('RankMeta', function() return require(replicatedStorage.TS.rank['rank-meta']).RankMeta end),
+		BalanceFile = safeRequire('BalanceFile', function() return require(replicatedStorage.TS.balance["balance-file"]).BalanceFile end),
+		ClientSyncEvents = safeRequire('ClientSyncEvents', function() return require(lplr.PlayerScripts.TS['client-sync-events']).ClientSyncEvents end),
+		SyncEventPriority = safeRequire('SyncEventPriority', function() return require(replicatedStorage.rbxts_include.node_modules['@easy-games']['sync-event'].out) end),
+		AbilityId = safeRequire('AbilityId', function() return require(replicatedStorage.TS.ability['ability-id']).AbilityId end),
+		IdUtil = safeRequire('IdUtil', function() return require(replicatedStorage.TS.util['id-util']).IdUtil end),
+		BlockSelector = safeRequire('BlockSelector', function() return require(game:GetService("ReplicatedStorage").rbxts_include.node_modules["@easy-games"]["block-engine"].out.client.select["block-selector"]).BlockSelector end),
 		KnockbackUtilInstance = replicatedStorage.TS.damage['knockback-util'],
-		BedwarsKitSkin = require(replicatedStorage.TS.games.bedwars['kit-skin']['bedwars-kit-skin-meta']).BedwarsKitSkinMeta,
-		KitController = Knit.Controllers.KitController,
-		FishermanUtil = require(replicatedStorage.TS.games.bedwars.kit.kits.fisherman['fisherman-util']).FishermanUtil,
-		FishMeta = require(replicatedStorage.TS.games.bedwars.kit.kits.fisherman['fish-meta']),
-	 	MatchHistroyApp = require(lplr.PlayerScripts.TS.controllers.global["match-history"].ui["match-history-moderation-app"]).MatchHistoryModerationApp,
-	 	MatchHistroyController = Knit.Controllers.MatchHistoryController,
-		BlockEngine = require(game:GetService("ReplicatedStorage").rbxts_include.node_modules["@easy-games"]["block-engine"].out).BlockEngine,
-		BlockSelectorMode = require(game:GetService("ReplicatedStorage").rbxts_include.node_modules["@easy-games"]["block-engine"].out.client.select["block-selector"]).BlockSelectorMode,
-		EntityUtil = require(game:GetService("ReplicatedStorage").TS.entity["entity-util"]).EntityUtil,
-		GamePlayer = require(replicatedStorage.TS.player['game-player']),
-		OfflinePlayerUtil = require(replicatedStorage.TS.player['offline-player-util']),
-		PlayerUtil = require(replicatedStorage.TS.player['player-util']),
-		KKKnitController = require(lplr.PlayerScripts.TS.lib.knit['knit-controller']),
-		AbilityController = Flamework.resolveDependency('@easy-games/game-core:client/controllers/ability/ability-controller@AbilityController'),
-		CooldownController = Flamework.resolveDependency("@easy-games/game-core:client/controllers/cooldown/cooldown-controller@CooldownController"),
-		CooldownIDS = require(replicatedStorage.TS.cooldown["cooldown-id"]).CooldownId,		
-		AnimationType = require(replicatedStorage.TS.animation['animation-type']).AnimationType,
-		AnimationUtil = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out['shared'].util['animation-util']).AnimationUtil,
-		AppController = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out.client.controllers['app-controller']).AppController,
-		BedBreakEffectMeta = require(replicatedStorage.TS.locker['bed-break-effect']['bed-break-effect-meta']).BedBreakEffectMeta,
-		BedwarsKitMeta = require(replicatedStorage.TS.games.bedwars.kit['bedwars-kit-meta']).BedwarsKitMeta,
-		BlockBreaker = Knit.Controllers.BlockBreakController.blockBreaker,
-		BlockController = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['block-engine'].out).BlockEngine,
-		BlockEngine = require(lplr.PlayerScripts.TS.lib['block-engine']['client-block-engine']).ClientBlockEngine,
-		BlockPlacer = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['block-engine'].out.client.placement['block-placer']).BlockPlacer,
-		BowConstantsTable = (Knit.Controllers.ProjectileController and Knit.Controllers.ProjectileController.enableBeam) and debug.getupvalue(Knit.Controllers.ProjectileController.enableBeam, 8) or {},
-		ClickHold = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out.client.ui.lib.util['click-hold']).ClickHold,
-		Client = Client,
-		ClientConstructor = require(replicatedStorage['rbxts_include']['node_modules']['@rbxts'].net.out.client),
-		ClientDamageBlock = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['block-engine'].out.shared.remotes).BlockEngineRemotes.Client,
-		CombatConstant = require(replicatedStorage.TS.combat['combat-constant']).CombatConstant,
-		SharedConstants = require(replicatedStorage.TS['shared-constants']),
-		DamageIndicator = Knit.Controllers.DamageIndicatorController.spawnDamageIndicator,
-		DefaultKillEffect = require(lplr.PlayerScripts.TS.controllers.global.locker['kill-effect'].effects['default-kill-effect']),
-		EmoteType = require(replicatedStorage.TS.locker.emote['emote-type']).EmoteType,
-		GameAnimationUtil = require(replicatedStorage.TS.animation['animation-util']).GameAnimationUtil,
-		NotificationController = Flamework.resolveDependency('@easy-games/game-core:client/controllers/notification-controller@NotificationController'),
+		BedwarsKitSkin = safeRequire('BedwarsKitSkin', function() return require(replicatedStorage.TS.games.bedwars['kit-skin']['bedwars-kit-skin-meta']).BedwarsKitSkinMeta end),
+		KitController = Knit and Knit.Controllers and Knit.Controllers.KitController,
+		FishermanUtil = safeRequire('FishermanUtil', function() return require(replicatedStorage.TS.games.bedwars.kit.kits.fisherman['fisherman-util']).FishermanUtil end),
+		FishMeta = safeRequire('FishMeta', function() return require(replicatedStorage.TS.games.bedwars.kit.kits.fisherman['fish-meta']) end),
+		MatchHistroyApp = safeRequire('MatchHistroyApp', function() return require(lplr.PlayerScripts.TS.controllers.global["match-history"].ui["match-history-moderation-app"]).MatchHistoryModerationApp end),
+		MatchHistroyController = Knit and Knit.Controllers and Knit.Controllers.MatchHistoryController,
+		BlockEngine = safeRequire('BlockEngine', function() return require(lplr.PlayerScripts.TS.lib['block-engine']['client-block-engine']).ClientBlockEngine end),
+		BlockSelectorMode = safeRequire('BlockSelectorMode', function() return require(game:GetService("ReplicatedStorage").rbxts_include.node_modules["@easy-games"]["block-engine"].out.client.select["block-selector"]).BlockSelectorMode end),
+		EntityUtil = safeRequire('EntityUtil', function() return require(game:GetService("ReplicatedStorage").TS.entity["entity-util"]).EntityUtil end),
+		GamePlayer = safeRequire('GamePlayer', function() return require(replicatedStorage.TS.player['game-player']) end),
+		OfflinePlayerUtil = safeRequire('OfflinePlayerUtil', function() return require(replicatedStorage.TS.player['offline-player-util']) end),
+		PlayerUtil = safeRequire('PlayerUtil', function() return require(replicatedStorage.TS.player['player-util']) end),
+		KKKnitController = safeRequire('KKKnitController', function() return require(lplr.PlayerScripts.TS.lib.knit['knit-controller']) end),
+		AbilityController = safeRequire('AbilityController', function() return Flamework.resolveDependency('@easy-games/game-core:client/controllers/ability/ability-controller@AbilityController') end),
+		CooldownController = safeRequire('CooldownController', function() return Flamework.resolveDependency("@easy-games/game-core:client/controllers/cooldown/cooldown-controller@CooldownController") end),
+		CooldownIDS = safeRequire('CooldownIDS', function() return require(replicatedStorage.TS.cooldown["cooldown-id"]).CooldownId end),
+		AnimationType = safeRequire('AnimationType', function() return require(replicatedStorage.TS.animation['animation-type']).AnimationType end),
+		AnimationUtil = safeRequire('AnimationUtil', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out['shared'].util['animation-util']).AnimationUtil end),
+		AppController = safeRequire('AppController', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out.client.controllers['app-controller']).AppController end),
+		BedBreakEffectMeta = safeRequire('BedBreakEffectMeta', function() return require(replicatedStorage.TS.locker['bed-break-effect']['bed-break-effect-meta']).BedBreakEffectMeta end),
+		BedwarsKitMeta = safeRequire('BedwarsKitMeta', function() return require(replicatedStorage.TS.games.bedwars.kit['bedwars-kit-meta']).BedwarsKitMeta end),
+		BlockBreaker = Knit and Knit.Controllers and Knit.Controllers.BlockBreakController and Knit.Controllers.BlockBreakController.blockBreaker,
+		BlockController = safeRequire('BlockController', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['block-engine'].out).BlockEngine end),
+		BlockPlacer = safeRequire('BlockPlacer', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['block-engine'].out.client.placement['block-placer']).BlockPlacer end),
+		BowConstantsTable = (function()
+			local pc = Knit and Knit.Controllers and Knit.Controllers.ProjectileController
+			if not (pc and type(pc.enableBeam) == 'function') then return {} end
+			local ok, ups = pcall(debug.getupvalues, pc.enableBeam)
+			if ok and type(ups) == 'table' then
+				for _, v in ups do
+					if type(v) == 'table' and rawget(v, 'RelX') and rawget(v, 'RelY') and rawget(v, 'RelZ') then return v end
+				end
+			end
+			return findUpvalueTable(pc.enableBeam, function(t) return rawget(t, 'RelX') ~= nil and rawget(t, 'RelY') ~= nil end, 64) or {}
+		end)(),
+		ClickHold = safeRequire('ClickHold', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out.client.ui.lib.util['click-hold']).ClickHold end),
+		Client = safeRequire('Client', function() return Client end),
+		ClientConstructor = safeRequire('ClientConstructor', function() return require(replicatedStorage['rbxts_include']['node_modules']['@rbxts'].net.out.client) end),
+		ClientDamageBlock = safeRequire('ClientDamageBlock', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['block-engine'].out.shared.remotes).BlockEngineRemotes.Client end),
+		CombatConstant = safeRequire('CombatConstant', function() return require(replicatedStorage.TS.combat['combat-constant']).CombatConstant end),
+		SharedConstants = (function()
+			local ok, mod = pcall(function() return require(replicatedStorage.TS['shared-constants']) end)
+			if not ok or not mod then return {BLOCK_PLACE_CPS = 12} end
+			if type(mod.CpsConstants) == 'table' then return mod.CpsConstants end
+			return mod
+		end)(),
+		DamageIndicator = Knit and Knit.Controllers and Knit.Controllers.DamageIndicatorController and Knit.Controllers.DamageIndicatorController.spawnDamageIndicator,
+		DefaultKillEffect = safeRequire('DefaultKillEffect', function() return require(lplr.PlayerScripts.TS.controllers.global.locker['kill-effect'].effects['default-kill-effect']) end),
+		EmoteType = safeRequire('EmoteType', function() return require(replicatedStorage.TS.locker.emote['emote-type']).EmoteType end),
+		GameAnimationUtil = safeRequire('GameAnimationUtil', function() return require(replicatedStorage.TS.animation['animation-util']).GameAnimationUtil end),
+		NotificationController = safeRequire('NotificationController', function() return Flamework.resolveDependency('@easy-games/game-core:client/controllers/notification-controller@NotificationController') end),
 		getIcon = function(item, showinv)
-			local itemmeta = bedwars.ItemMeta[item.itemType]
-			return itemmeta and showinv and itemmeta.image or ''
+			local meta = bedwars.ItemMeta
+			local im = meta and item and meta[item.itemType]
+			return im and showinv and im.image or ''
 		end,
-		getInventory = function(plr)
+		getInventory = safeRequire('getInventory', function() return function(plr)
 			local suc, res = pcall(function()
 				return InventoryUtil.getInventory(plr)
 			end)
@@ -984,45 +1204,63 @@ run(function()
 				items = {},
 				armor = {}
 			}
-		end,
-		MatchHistoryController = require(lplr.PlayerScripts.TS.controllers.global['match-history']['match-history-controller']),
-		PlayerProfileUIController = require(lplr.PlayerScripts.TS.controllers.global['player-profile']['player-profile-ui-controller']),
-		HudAliveCount = require(lplr.PlayerScripts.TS.controllers.global['top-bar'].ui.game['hud-alive-player-counts']).HudAlivePlayerCounts,
+		end end),
+		MatchHistoryController = safeRequire('MatchHistoryController', function() return require(lplr.PlayerScripts.TS.controllers.global['match-history']['match-history-controller']) end),
+		PlayerProfileUIController = safeRequire('PlayerProfileUIController', function() return require(lplr.PlayerScripts.TS.controllers.global['player-profile']['player-profile-ui-controller']) end),
+		HudAliveCount = safeRequire('HudAliveCount', function() return require(lplr.PlayerScripts.TS.controllers.global['top-bar'].ui.game['hud-alive-player-counts']).HudAlivePlayerCounts end),
 		ItemMeta = (function()
-			local fn = require(replicatedStorage.TS.item['item-meta']).getItemMeta
-			for i = 1, 6 do
-				local v = debug.getupvalue(fn, i)
+			local ok, mod = pcall(function() return require(replicatedStorage.TS.item['item-meta']) end)
+			if not ok or not mod then return {} end
+			local v = safeUpvalue(mod.getItemMeta, 1)
+			if type(v) == 'table' and next(v) then return v end
+			if type(mod.items) == 'table' and next(mod.items) then return mod.items end
+			return findUpvalueTable(mod.getItemMeta, function(t)
+				local kk, vv = next(t)
+				return type(kk) == 'string' and type(vv) == 'table'
+			end, 64) or {}
+		end)(),
+		KillEffectMeta = safeRequire('KillEffectMeta', function() return require(replicatedStorage.TS.locker['kill-effect']['kill-effect-meta']).KillEffectMeta end),
+		KillFeedController = safeRequire('KillFeedController', function() return Flamework.resolveDependency('client/controllers/game/kill-feed/kill-feed-controller@KillFeedController') end),
+		SoundList = safeRequire('SoundList', function() return require(replicatedStorage.TS.sound['game-sound']).GameSound end),
+		AudioManager = safeRequire('AudioManager', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).AudioManager end),
+		Knit = safeRequire('Knit', function() return Knit end),
+		KnockbackUtil = safeRequire('KnockbackUtil', function() return require(replicatedStorage.TS.damage['knockback-util']).KnockbackUtil end),
+		MageKitUtil = safeRequire('MageKitUtil', function() return require(replicatedStorage.TS.games.bedwars.kit.kits.mage['mage-kit-util']).MageKitUtil end),
+		NametagController = Knit and Knit.Controllers and Knit.Controllers.NametagController,
+		PartyController = safeRequire('PartyController', function() return Flamework.resolveDependency("@easy-games/lobby:client/controllers/party-controller@PartyController") end),
+		ProjectileMeta = safeRequire('ProjectileMeta', function() return require(replicatedStorage.TS.projectile['projectile-meta']).ProjectileMeta end),
+		QueryUtil = safeRequire('QueryUtil', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).GameQueryUtil end),
+		QueueCard = safeRequire('QueueCard', function() return require(lplr.PlayerScripts.TS.controllers.global.queue.ui['queue-card']).QueueCard end),
+		QueueMeta = safeRequire('QueueMeta', function() return require(replicatedStorage.TS.game['queue-meta']).QueueMeta end),
+		Roact = safeRequire('Roact', function() return require(replicatedStorage['rbxts_include']['node_modules']['@rbxts']['roact'].src) end),
+		RuntimeLib = safeRequire('RuntimeLib', function() return require(replicatedStorage['rbxts_include'].RuntimeLib) end),
+		Store = safeRequire('Store', function() return require(lplr.PlayerScripts.TS.ui.store).ClientStore end),
+		TeamUpgradeMeta = (function()
+			local ok, mod = pcall(function() return require(replicatedStorage.TS.games.bedwars['team-upgrade']['team-upgrade-meta']) end)
+			if not ok or not mod then return {} end
+			for _, idx in {2, 6} do
+				local v = safeUpvalue(mod.getTeamUpgradeMetaForQueue, idx)
 				if type(v) == 'table' and next(v) then return v end
 			end
-			return {}
+			return findUpvalueTable(mod.getTeamUpgradeMetaForQueue, function(t)
+				local kk, vv = next(t)
+				return type(kk) == 'string' and type(vv) == 'table' and vv.tiers ~= nil
+			end, 64) or {}
 		end)(),
-		KillEffectMeta = require(replicatedStorage.TS.locker['kill-effect']['kill-effect-meta']).KillEffectMeta,
-		KillFeedController = Flamework.resolveDependency('client/controllers/game/kill-feed/kill-feed-controller@KillFeedController'),
-		SoundList = require(replicatedStorage.TS.sound['game-sound']).GameSound,
-		AudioManager = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).AudioManager,
-		Knit = Knit,
-		KnockbackUtil = require(replicatedStorage.TS.damage['knockback-util']).KnockbackUtil,
-		MageKitUtil = require(replicatedStorage.TS.games.bedwars.kit.kits.mage['mage-kit-util']).MageKitUtil,
-		NametagController = Knit.Controllers.NametagController,
-		PartyController = Flamework.resolveDependency("@easy-games/lobby:client/controllers/party-controller@PartyController"),
-		ProjectileMeta = require(replicatedStorage.TS.projectile['projectile-meta']).ProjectileMeta,
-		QueryUtil = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).GameQueryUtil,
-		QueueCard = require(lplr.PlayerScripts.TS.controllers.global.queue.ui['queue-card']).QueueCard,
-		QueueMeta = require(replicatedStorage.TS.game['queue-meta']).QueueMeta,
-		Roact = require(replicatedStorage['rbxts_include']['node_modules']['@rbxts']['roact'].src),
-		RuntimeLib = require(replicatedStorage['rbxts_include'].RuntimeLib),
-		SoundList = require(replicatedStorage.TS.sound['game-sound']).GameSound,
-		Store = require(lplr.PlayerScripts.TS.ui.store).ClientStore,
-		TeamUpgradeMeta = debug.getupvalue(require(replicatedStorage.TS.games.bedwars['team-upgrade']['team-upgrade-meta']).getTeamUpgradeMetaForQueue, 6),
-		UILayers = require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).UILayers,
-		VisualizerUtils = require(lplr.PlayerScripts.TS.lib.visualizer['visualizer-utils']).VisualizerUtils,
-		WeldTable = require(replicatedStorage.TS.util['weld-util']).WeldUtil,
-		WinEffectMeta = require(replicatedStorage.TS.locker['win-effect']['win-effect-meta']).WinEffectMeta,
-		ZapNetworking = require(lplr.PlayerScripts.TS.lib.network),
+		UILayers = safeRequire('UILayers', function() return require(replicatedStorage['rbxts_include']['node_modules']['@easy-games']['game-core'].out).UILayers end),
+		VisualizerUtils = safeRequire('VisualizerUtils', function() return require(lplr.PlayerScripts.TS.lib.visualizer['visualizer-utils']).VisualizerUtils end),
+		WeldTable = safeRequire('WeldTable', function() return require(replicatedStorage.TS.util['weld-util']).WeldUtil end),
+		WinEffectMeta = safeRequire('WinEffectMeta', function() return require(replicatedStorage.TS.locker['win-effect']['win-effect-meta']).WinEffectMeta end),
+		ZapNetworking = safeRequire('ZapNetworking', function() return require(lplr.PlayerScripts.TS.lib.network) end),
+		Handler = RemoteHandler,
+		Flamework = Flamework,
+		Remotes = Remotes,
 	}, {
 		__index = function(self, ind)
-			rawset(self, ind, Knit.Controllers[ind])
-			return rawget(self, ind)
+			local ctrl = Knit and Knit.Controllers
+			local val = ctrl and rawget(ctrl, ind) or nil
+			if val ~= nil then rawset(self, ind, val) end
+			return val
 		end
 	})
 
@@ -1090,41 +1328,50 @@ run(function()
 		}
 	end
 	
-	bedwars.ProjectileLaunchHook = createMethodHook(bedwars.ProjectileController, 'calculateImportantLaunchValues')
+	if bedwars.ProjectileController and type(bedwars.ProjectileController.calculateImportantLaunchValues) == 'function' then
+		bedwars.ProjectileLaunchHook = createMethodHook(bedwars.ProjectileController, 'calculateImportantLaunchValues')
+	else
+		bedwars.ProjectileLaunchHook = {Add = function() return function() end end, Destroy = function() end}
+	end
 
 
 	getgenv().bedwars = bedwars
 
+	local CTRL = setmetatable({}, {__index = function(_, k)
+		local c = Knit and Knit.Controllers and rawget(Knit.Controllers, k)
+		if c ~= nil then return c end
+		return setmetatable({}, {__index = function() return function() end end})
+	end})
 	local remoteNames = {
-		AfkStatus = safeGetProto(Knit.Controllers.AfkController.KnitStart, 1),
-		AttackEntity = Knit.Controllers.SwordController.sendServerRequest,
-		BeePickup = Knit.Controllers.BeeNetController.trigger,
-		CannonAim = safeGetProto(Knit.Controllers.CannonController.startAiming, 5),
-		CannonLaunch = Knit.Controllers.CannonHandController.launchSelf,
-		ConsumeBattery = safeGetProto(Knit.Controllers.BatteryController.onKitLocalActivated, 1),
-		ConsumeItem = safeGetProto(Knit.Controllers.ConsumeController.onEnable, 1),
-		ConsumeSoul = Knit.Controllers.GrimReaperController.consumeSoul,
-		ConsumeTreeOrb = safeGetProto(Knit.Controllers.EldertreeController.createTreeOrbInteraction, 1),
-		DepositPinata = safeGetProto(safeGetProto(Knit.Controllers.PiggyBankController.KnitStart, 2), 5),
-		DragonBreath = safeGetProto(Knit.Controllers.VoidDragonController.onKitLocalActivated, 5),
-		DragonEndFly = safeGetProto(Knit.Controllers.VoidDragonController.flapWings, 1),
-		DragonFly = Knit.Controllers.VoidDragonController.flapWings,
-		DropItem = Knit.Controllers.ItemDropController.dropItemInHand,
+		AfkStatus = safeGetProto(CTRL.AfkController.KnitStart, 1),
+		AttackEntity = CTRL.SwordController.sendServerRequest,
+		BeePickup = CTRL.BeeNetController.trigger,
+		CannonAim = safeGetProto(CTRL.CannonController.startAiming, 5),
+		CannonLaunch = CTRL.CannonHandController.launchSelf,
+		ConsumeBattery = safeGetProto(CTRL.BatteryController.onKitLocalActivated, 1),
+		ConsumeItem = safeGetProto(CTRL.ConsumeController.onEnable, 1),
+		ConsumeSoul = CTRL.GrimReaperController.consumeSoul,
+		ConsumeTreeOrb = safeGetProto(CTRL.EldertreeController.createTreeOrbInteraction, 1),
+		DepositPinata = safeGetProto(safeGetProto(CTRL.PiggyBankController.KnitStart, 2), 5),
+		DragonBreath = safeGetProto(CTRL.VoidDragonController.onKitLocalActivated, 5),
+		DragonEndFly = safeGetProto(CTRL.VoidDragonController.flapWings, 1),
+		DragonFly = CTRL.VoidDragonController.flapWings,
+		DropItem = CTRL.ItemDropController.dropItemInHand,
 		EquipItem = safeGetProto(require(replicatedStorage.TS.entity.entities['inventory-entity']).InventoryEntity.equipItem, 3),
-		FireProjectile = debug.getupvalue(Knit.Controllers.ProjectileController.launchProjectileWithValues, 2),
-		GroundHit = Knit.Controllers.FallDamageController.KnitStart,
-		GuitarHeal = Knit.Controllers.GuitarController.performHeal,
-		HannahKill = safeGetProto(Knit.Controllers.HannahController.registerExecuteInteractions, 1),
-		HarvestCrop = safeGetProto(safeGetProto(Knit.Controllers.CropController.KnitStart, 4), 1),
-		KaliyahPunch = safeGetProto(Knit.Controllers.DragonSlayerController.onKitLocalActivated, 1),
-		MageSelect = safeGetProto(Knit.Controllers.MageController.registerTomeInteraction, 1),
-		MinerDig = safeGetProto(Knit.Controllers.MinerController.setupMinerPrompts, 1),
-		PickupItem = Knit.Controllers.ItemDropController.checkForPickup,
-		PickupMetal = safeGetProto(Knit.Controllers.HiddenMetalController.onKitLocalActivated, 4),
+		FireProjectile = safeUpvalue(CTRL.ProjectileController.launchProjectileWithValues, 2) or 'ProjectileFire',
+		GroundHit = CTRL.FallDamageController.KnitStart,
+		GuitarHeal = CTRL.GuitarController.performHeal,
+		HannahKill = safeGetProto(CTRL.HannahController.registerExecuteInteractions, 1),
+		HarvestCrop = safeGetProto(safeGetProto(CTRL.CropController.KnitStart, 4), 1),
+		KaliyahPunch = safeGetProto(CTRL.DragonSlayerController.onKitLocalActivated, 1),
+		MageSelect = safeGetProto(CTRL.MageController.registerTomeInteraction, 1),
+		MinerDig = safeGetProto(CTRL.MinerController.setupMinerPrompts, 1),
+		PickupItem = CTRL.ItemDropController.checkForPickup,
+		PickupMetal = safeGetProto(CTRL.HiddenMetalController.onKitLocalActivated, 4),
 		ReportPlayer = require(lplr.PlayerScripts.TS.controllers.global.report['report-controller']).default.reportPlayer,
-		ResetCharacter = safeGetProto(Knit.Controllers.ResetController.createBindable, 1),
-		SummonerClawAttack = Knit.Controllers.SummonerClawHandController.attack,
-		WarlockTarget = safeGetProto(Knit.Controllers.WarlockStaffController.KnitStart, 2)
+		ResetCharacter = safeGetProto(CTRL.ResetController.createBindable, 1),
+		SummonerClawAttack = CTRL.SummonerClawHandController.attack,
+		WarlockTarget = safeGetProto(CTRL.WarlockStaffController.KnitStart, 2)
 	}
 
 	local function dumpRemote(tab)
@@ -1212,9 +1459,21 @@ run(function()
 		remotes[i] = remote
 	end
 
+	local remoteAlias = {
+		AttackEntity = 'SwordHit', EquipItem = 'SetInvItem', FireProjectile = 'ProjectileFire',
+		PickupItem = 'PickupItemDrop', AfkStatus = 'AfkInfo', CannonAim = 'AimCannon',
+		CannonLaunch = 'LaunchSelfFromCannon', ConsumeSoul = 'ConsumeGrimReaperSoul',
+		GuitarHeal = 'PlayGuitar', BeePickup = 'PickUpBee',
+		SummonerClawAttack = 'SummonerClawAttackRequest', WarlockTarget = 'WarlockLinkTarget',
+		HarvestCrop = 'CropHarvest', MinerDig = 'DestroyPetrifiedPlayer',
+		PickupMetal = 'CollectCollectableEntity', DepositPinata = 'DepositCoins',
+	}
+	for k, v in remoteAlias do
+		if not remotes[k] or remotes[k] == '' then remotes[k] = v end
+	end
 	getgenv().remotes = remotes
 
-	OldBreak = bedwars.BlockController.isBlockBreakable
+	OldBreak = bedwars.BlockController and bedwars.BlockController.isBlockBreakable
 
 	Client.Get = function(self, remoteName)
 		local call = OldGet(self, remoteName)
@@ -1258,6 +1517,23 @@ run(function()
 
 	local bedtms = {}
 
+	if not (bedwars.BlockController and bedwars.Store and bedwars.ZapNetworking and bedwars.BlockPlacer and bedwars.BlockEngine) then
+		warn('[fix] missing modules: '..table.concat(failedRequires, ', '))
+		return
+	end
+	bedwars.DefaultPlaceCPS = bedwars.SharedConstants and bedwars.SharedConstants.BLOCK_PLACE_CPS or 12
+	if not bedwars.SoundManager then
+		bedwars.SoundManager = {playSound = function(_, id, opts)
+			if not id or not bedwars.AudioManager then return end
+			return (pcall(function()
+				if type(opts) == 'table' then
+					bedwars.AudioManager:playAudio(id, {position = opts.position, volumeMultiplier = opts.volumeMultiplier, playbackSpeedMultiplier = opts.playbackSpeedMultiplier})
+				else
+					bedwars.AudioManager:playAudio(id)
+				end
+			end))
+		end}
+	end
 	bedwars.BlockController.isBlockBreakable = function(self, breakTable, plr)
 		local obj = bedwars.BlockController:getStore():getBlockAt(breakTable.blockPosition)
 
@@ -1314,9 +1590,9 @@ run(function()
 
 	local function getBlockHits(block, blockpos)
 		if not block then return 0 end
-		local breaktype = bedwars.ItemMeta[block.Name].block.breakType
+		local breaktype = (itemMeta(block.Name).block or {}).breakType
 		local tool = store.tools[breaktype]
-		tool = tool and bedwars.ItemMeta[tool.itemType].breakBlock[breaktype] or 2
+		tool = tool and (itemMeta(tool.itemType).breakBlock or {})[breaktype] or 2
 		return getBlockHealth(block, bedwars.BlockController:getBlockPosition(blockpos)) / tool
 	end
 
@@ -1412,7 +1688,7 @@ run(function()
 			if not dblock then return end
 
 			if not nobreak and (workspace:GetServerTimeNow() - bedwars.SwordController.lastAttack) > 0.2 then
-				local breaktype = bedwars.ItemMeta[dblock.Name].block.breakType
+				local breaktype = (itemMeta(dblock.Name).block or {}).breakType
 				local tool = store.tools[breaktype]
 				if tool then
 					if autotool then
@@ -1527,7 +1803,7 @@ run(function()
 			if newinv.inventory.hand ~= oldinv.inventory.hand then
 				local currentHand, toolType = new.Inventory.observedInventory.inventory.hand, ''
 				if currentHand then
-					local handData = bedwars.ItemMeta[currentHand.itemType]
+					local handData = itemMeta(currentHand.itemType)
 					toolType = handData.sword and 'sword' or handData.block and 'block' or currentHand.itemType:find('bow') and 'bow'
 				end
 
@@ -1650,8 +1926,8 @@ run(function()
 
 	vape:Clean(function()
 		Client.Get = OldGet
-		bedwars.BlockController.isBlockBreakable = OldBreak
-		store.blockPlacer:disable()
+		if bedwars.BlockController and OldBreak then bedwars.BlockController.isBlockBreakable = OldBreak end
+		if store.blockPlacer then pcall(function() store.blockPlacer:disable() end) end
 		for _, v in vapeEvents do
 			v:Destroy()
 		end
@@ -2423,7 +2699,7 @@ run(function()
 					local doAttack
 					if not bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN) then
 						if entitylib.isAlive and store.hand.toolType == 'sword' and bedwars.DaoController.chargingMaid == nil then
-							local attackRange = bedwars.ItemMeta[store.hand.tool.Name].sword.attackRange
+							local attackRange = (itemMeta(store.hand.tool.Name).sword or {}).attackRange
 							rayParams.FilterDescendantsInstances = {lplr.Character}
 	
 							local unit = lplr:GetMouse().UnitRay
@@ -2597,7 +2873,7 @@ run(function()
 									local lastTeleport = lplr:GetAttribute('LastTeleported')
 									local connection
 									connection = runService.PreSimulation:Connect(function()
-										if vape.Modules.Fly.Enabled or vape.Modules.InfiniteFly.Enabled or vape.Modules.LongJump.Enabled then
+										if (vape.Modules.Fly and vape.Modules.Fly.Enabled) or (vape.Modules.InfiniteFly and vape.Modules.InfiniteFly.Enabled) or (vape.Modules.LongJump and vape.Modules.LongJump.Enabled) then
 											connection:Disconnect()
 											AntiFallDirection = nil
 											return
@@ -4116,7 +4392,7 @@ run(function()
 		task.wait(0.1)
 		bedwars.ProjectileController:createLocalProjectile(bedwars.ProjectileMeta[proj], proj, proj, shootPosition.Position, '', shootPosition.LookVector * speed, {drawDurationSeconds = 1})
 		if projectileRemote:InvokeServer(item.tool, proj, proj, shootPosition.Position, pos, shootPosition.LookVector * speed, httpService:GenerateGUID(true), {drawDurationSeconds = 1}, workspace:GetServerTimeNow() - 0.045) then
-			local shoot = bedwars.ItemMeta[item.itemType].projectileSource.launchSound
+			local shoot = (itemMeta(item.itemType).projectileSource or {}).launchSound
 			shoot = shoot and shoot[math.random(1, #shoot)] or nil
 			if shoot then
 				bedwars.AudioManager:playAudio(shoot)
@@ -4133,7 +4409,7 @@ run(function()
 			task.delay(0, function()
 				local block, blockpos = getPlacedBlock(rounded)
 				if block and block.Name == 'cannon' and (entitylib.character.RootPart.Position - block.Position).Magnitude < 20 then
-					local breaktype = bedwars.ItemMeta[block.Name].block.breakType
+					local breaktype = (itemMeta(block.Name).block or {}).breakType
 					local tool = store.tools[breaktype]
 					if tool then
 						switchItem(tool.tool)
@@ -4683,7 +4959,7 @@ end
 local function getProjectiles()
 	local items = {}
 	for _, item in store.inventory.inventory.items do
-		local proj = bedwars.ItemMeta[item.itemType].projectileSource
+		local proj = itemMeta(item.itemType).projectileSource
 		local ammo = proj and getAmmo(proj)
 		if ammo and table.find(List.ListEnabled, ammo) then
 			table.insert(items, {
@@ -4717,7 +4993,8 @@ ProjectileAura = vape.Categories.Blatant:CreateModule({
 							local item, ammo, projectile, itemMeta = unpack(data)
 							if (FireDelays[item.itemType] or 0) < tick() then
 								rayCheck.FilterDescendantsInstances = {workspace.Map}
-								local meta = bedwars.ProjectileMeta[projectile]
+								local meta = bedwars.ProjectileMeta and bedwars.ProjectileMeta[projectile]
+					if not meta then continue end
 								local projSpeed, gravity = meta.launchVelocity, meta.gravitationalAcceleration or 196.2
 								local calc = prediction.SolveTrajectory(pos, projSpeed, gravity, ent.RootPart.Position, ent.RootPart.Velocity, workspace.Gravity, ent.HipHeight, ent.Jumping and 42.6 or nil, rayCheck)
 								if calc then
@@ -4796,7 +5073,7 @@ run(function()
 			if callback then
 				Speed:Clean(runService.PreSimulation:Connect(function(dt)
 					bedwars.StatefulEntityKnockbackController.lastImpulseTime = callback and math.huge or time()
-					if entitylib.isAlive and not Fly.Enabled and not InfiniteFly.Enabled and not LongJump.Enabled and isnetworkowner(entitylib.character.RootPart) then
+					if entitylib.isAlive and not Fly.Enabled and not (vape.Modules.InfiniteFly and vape.Modules.InfiniteFly.Enabled) and not LongJump.Enabled and isnetworkowner(entitylib.character.RootPart) then
 						local state = entitylib.character.Humanoid:GetState()
 						if state == Enum.HumanoidStateType.Climbing then return end
 	
@@ -5095,7 +5372,8 @@ run(function()
     -- =========================================================
     local function getKitMeta(player)
         local kit = player:GetAttribute('PlayingAsKits') or player:GetAttribute('PlayingAsKit') or 'none'
-        return bedwars.BedwarsKitMeta[kit] or bedwars.BedwarsKitMeta.none, kit
+        local km = bedwars.BedwarsKitMeta or {}
+        return km[kit] or km.none or {name = kit, renderImage = ''}, kit
     end
 
     local function getEnchantImages(player)
@@ -5120,7 +5398,7 @@ run(function()
         icon.Size = UDim2.fromOffset(24, 24)
         icon.Position = UDim2.new(1, 4, 0, -4)
         icon.BackgroundTransparency = 1
-        icon.Image = (kitMeta and kitMeta.renderImage) or kitImageIds['none'] or ''
+        icon.Image = (kitMeta and kitMeta.renderImage) or ''
         icon.Parent = nametag
     end
 
@@ -5174,7 +5452,7 @@ run(function()
         nametag.Helmet.Image = bedwars.getIcon(inventory.armor[4] or {itemType = ''}, true)
         nametag.Chestplate.Image = bedwars.getIcon(inventory.armor[5] or {itemType = ''}, true)
         nametag.Boots.Image = bedwars.getIcon(inventory.armor[6] or {itemType = ''}, true)
-        nametag.Kit.Image = kit and kit ~= 'none' and bedwars.BedwarsKitMeta[kit] and bedwars.BedwarsKitMeta[kit].renderImage or ''
+        nametag.Kit.Image = kit and kit ~= 'none' and bedwars.BedwarsKitMeta and bedwars.BedwarsKitMeta[kit] and bedwars.BedwarsKitMeta[kit].renderImage or ''
     end
 
     local function getEquipmentText(ent)
@@ -5997,13 +6275,14 @@ run(function()
 	end
 	pcall(function()
 		table.sort(sortTable, function(a, b)
-			return bedwars.BedwarsKitMeta[a].name < bedwars.BedwarsKitMeta[b].name
+			local km = bedwars.BedwarsKitMeta or {}
+		return ((km[a] and km[a].name) or a) < ((km[b] and km[b].name) or b)
 		end)
 	end)
 	for _, v in sortTable do
 		pcall(function()
 			Toggles[v] = AutoKit:CreateToggle({
-				Name = bedwars.BedwarsKitMeta[v].name,
+				Name = (bedwars.BedwarsKitMeta and bedwars.BedwarsKitMeta[v] and bedwars.BedwarsKitMeta[v].name) or v,
 				Default = true
 			})
 		end)
@@ -6134,7 +6413,7 @@ run(function()
     local function getProjectiles()
     	local items = {}
     	for _, item in store.inventory.inventory.items do
-    		local proj = bedwars.ItemMeta[item.itemType].projectileSource
+    		local proj = itemMeta(item.itemType).projectileSource
     		local ammo = proj and getAmmo(proj)
     		if ammo and table.find(Projectiles.ListEnabled, ammo) then
     			table.insert(items, {
@@ -6175,7 +6454,7 @@ run(function()
     		ammo = hand.tool.Name:gsub('frost_staff', 'frosty_snowball')
     	end
     
-    	local callback = canDebug and meta.projectileType or function(res)
+    	local callback = (canDebug() and meta.projectileType) or function(res)
     		return 'arrow'
     	end
     
@@ -6187,7 +6466,8 @@ run(function()
     		local proj, meta, ammo, projectile = getAttackData()
     
     		if proj then
-    			local projmeta = bedwars.ProjectileMeta[ammo]
+    			local projmeta = bedwars.ProjectileMeta and bedwars.ProjectileMeta[ammo]
+			if not projmeta then return end
     			local projSpeed = projmeta.launchVelocity
     
     			local selfpos = entitylib.character.RootPart.Position
@@ -6370,7 +6650,8 @@ run(function()
 					if Toggles.BedDestroyed.Enabled and bedTable.brokenBedTeam.id == lplr:GetAttribute('Team') then
 						sendMessage('BedDestroyed', (bedTable.player.DisplayName or bedTable.player.Name), 'how dare you >:( | <obj>')
 					elseif Toggles.Bed.Enabled and bedTable.player.UserId == lplr.UserId then
-						local team = bedwars.QueueMeta[store.queueType].teams[tonumber(bedTable.brokenBedTeam.id)]
+						local qm = bedwars.QueueMeta and bedwars.QueueMeta[store.queueType]
+					local team = qm and qm.teams and qm.teams[tonumber(bedTable.brokenBedTeam.id)]
 						sendMessage('Bed', team and team.displayName:lower() or 'white', 'nice bed lul | <obj>')
 					end
 				end))
@@ -6553,7 +6834,7 @@ run(function()
 									}):andThen(function(suc)
 										if suc and bedwars.SoundList then
 											bedwars.SoundManager:playSound(bedwars.SoundList.PICKUP_ITEM_DROP)
-											local sound = bedwars.ItemMeta[v.Name].pickUpOverlaySound
+											local sound = itemMeta(v.Name).pickUpOverlaySound
 											if sound then
 												bedwars.SoundManager:playSound(sound, {
 													position = v.Position,
@@ -6690,7 +6971,7 @@ run(function()
 				return wool, amount
 			else
 				for _, item in store.inventory.inventory.items do
-					if bedwars.ItemMeta[item.itemType].block then
+					if itemMeta(item.itemType).block then
 						return item.itemType, item.amount
 					end
 				end
@@ -7084,7 +7365,7 @@ run(function()
 	
 	local function switchHotbarItem(block)
 		if block and not block:GetAttribute('NoBreak') and not block:GetAttribute('Team'..(lplr:GetAttribute('Team') or 0)..'NoBreak') then
-			local tool, slot = store.tools[bedwars.ItemMeta[block.Name].block.breakType], nil
+			local tool, slot = store.tools[(itemMeta(block.Name).block or {}).breakType], nil
 			if tool then
 				for i, v in store.inventory.hotbar do
 					if v.item and v.item.itemType == tool.itemType then slot = i - 1 break end
@@ -7139,7 +7420,7 @@ run(function()
 	local function getBlocks()
 		local blocks = {}
 		for _, item in store.inventory.inventory.items do
-			local block = bedwars.ItemMeta[item.itemType].block
+			local block = itemMeta(item.itemType).block
 			if block then
 				table.insert(blocks, {item.itemType, block.health})
 			end
@@ -7339,7 +7620,7 @@ run(function()
 				text.Size = UDim2.fromOffset(100, 32)
 				text.Position = UDim2.fromOffset(32, 0)
 				text.BackgroundTransparency = 1
-				text.Text = (bedwars.ItemMeta[i] and bedwars.ItemMeta[i].displayName or i)..': '..v
+				text.Text = (itemMeta(i).displayName or i)..': '..v
 				text.TextXAlignment = Enum.TextXAlignment.Left
 				text.TextColor3 = uipallet.Text
 				text.TextSize = 14
@@ -7877,7 +8158,7 @@ run(function()
         for i = tool, #tools do
             local v = safeGetShopItem(tools[i])
             if canBuy(v, currencytable) then
-                if SmartCheck.Enabled and bedwars.ItemMeta[tools[i]].breakBlock and i > 2 then
+                if SmartCheck.Enabled and itemMeta(tools[i]).breakBlock and i > 2 then
                     if Armor.Enabled then
                         local currentarmor = store.inventory.inventory.armor[2]
                         currentarmor = currentarmor and currentarmor ~= 'empty' and currentarmor.itemType or 'none'
@@ -8158,7 +8439,7 @@ run(function()
     })
 
     local count = 0
-    for i, v in bedwars.TeamUpgradeMeta do
+    for i, v in (bedwars.TeamUpgradeMeta or {}) do
         local toggleCount = count
         table.insert(UpgradeToggles, AutoBuy:CreateToggle({
             Name = 'Buy ' .. (v.name == 'Armor' and 'Protection' or v.name),
@@ -8474,7 +8755,7 @@ run(function()
 	
 			if text == '' then
 				for _, v in {'diamond_sword', 'diamond_pickaxe', 'diamond_axe', 'shears', 'wood_bow', 'wool_white', 'fireball', 'apple', 'iron', 'gold', 'diamond', 'emerald'} do
-					createitem(v, bedwars.ItemMeta[v].image)
+					createitem(v, itemMeta(v).image or '')
 				end
 				return
 			end
@@ -8686,7 +8967,7 @@ run(function()
 		end)
 	
 		for _, item in clone do
-			local block = bedwars.ItemMeta[item.itemType].block
+			local block = itemMeta(item.itemType).block
 			if block and not block.seeThrough then
 				return item
 			end
@@ -8849,7 +9130,7 @@ run(function()
 				end
 	
 				bedwars.ClickHold.showProgress = function(self)
-					local roact = debug.getupvalue(oldshowprogress, 1)
+					local roact = safeUpvalue(oldshowprogress, 1) or bedwars.Roact
 					local countdown = roact.mount(roact.createElement('ScreenGui', {}, { roact.createElement('Frame', {
 						[roact.Ref] = self.wrapperRef,
 						Size = UDim2.new(),
@@ -8948,7 +9229,8 @@ run(function()
 		scanSide(v.Adornee, start, alreadygot)
 		scanSide(v.Adornee, start + Vector3.new(0, 0, 3), alreadygot)
 		table.sort(alreadygot, function(a, b)
-			return (bedwars.ItemMeta[a].block and bedwars.ItemMeta[a].block.health or 0) > (bedwars.ItemMeta[b].block and bedwars.ItemMeta[b].block.health or 0)
+			local ma, mb = bedwars.ItemMeta[a], bedwars.ItemMeta[b]
+		return (ma and ma.block and ma.block.health or 0) > (mb and mb.block and mb.block.health or 0)
 		end)
 		v.Enabled = #alreadygot > 0
 	
@@ -9114,7 +9396,7 @@ run(function()
 						Size = UDim2.fromOffset(145, 14),
 						Position = UDim2.fromOffset(13, 12),
 						BackgroundTransparency = 1,
-						Text = bedwars.ItemMeta[block.Name].displayName or block.Name,
+						Text = itemMeta(block.Name).displayName or block.Name,
 						TextXAlignment = Enum.TextXAlignment.Left,
 						TextYAlignment = Enum.TextYAlignment.Top,
 						TextColor3 = Color3.new(),
@@ -9125,7 +9407,7 @@ run(function()
 						Size = UDim2.fromOffset(145, 14),
 						Position = UDim2.fromOffset(12, 11),
 						BackgroundTransparency = 1,
-						Text = bedwars.ItemMeta[block.Name].displayName or block.Name,
+						Text = itemMeta(block.Name).displayName or block.Name,
 						TextXAlignment = Enum.TextXAlignment.Left,
 						TextYAlignment = Enum.TextYAlignment.Top,
 						TextColor3 = color.Dark(uipallet.Text, 0.16),
@@ -9178,7 +9460,7 @@ run(function()
 			if (v.Position - localPosition).Magnitude < Range.Value and bedwars.BlockController:isBlockBreakable({blockPosition = v.Position / 3}, lplr) then
 				if not SelfBreak.Enabled and v:GetAttribute('PlacedByUserId') == lplr.UserId then continue end
 				if (v:GetAttribute('BedShieldEndTime') or 0) > workspace:GetServerTimeNow() then continue end
-				if LimitItem.Enabled and not (store.hand.tool and bedwars.ItemMeta[store.hand.tool.Name].breakBlock) then continue end
+				if LimitItem.Enabled and not (store.hand.tool and itemMeta(store.hand.tool.Name).breakBlock) then continue end
 	
 				hit += 1
 				local target, path, endpos = bedwars.breakBlock(v, Effect.Enabled, Animation.Enabled, CustomHealth.Enabled and customHealthbar or nil, InstantBreak.Enabled)
@@ -9353,7 +9635,7 @@ run(function()
 		Tooltip = 'Custom bed break effects'
 	})
 	local BreakEffectName = {}
-	for i, v in bedwars.BedBreakEffectMeta do
+	for i, v in (bedwars.BedBreakEffectMeta or {}) do
 		table.insert(BreakEffectName, v.name)
 		NameToId[v.name] = i
 	end
@@ -9424,7 +9706,7 @@ run(function()
 	local Anchor
 	local Stroke
 	local suc, tab = pcall(function()
-		return debug.getupvalue(bedwars.DamageIndicator, 2)
+		return safeUpvalue(bedwars.DamageIndicator, 2)
 	end)
 	tab = suc and tab or {}
 	local oldvalues, oldfont = {}
@@ -9676,7 +9958,11 @@ run(function()
 	local Interface
 	local HotbarOpenInventory = require(lplr.PlayerScripts.TS.controllers.global.hotbar.ui['hotbar-open-inventory']).HotbarOpenInventory
 	local HotbarHealthbar = require(lplr.PlayerScripts.TS.controllers.global.hotbar.ui.healthbar['hotbar-healthbar']).HotbarHealthbar
-	local HotbarApp = getRoactRender(require(lplr.PlayerScripts.TS.controllers.global.hotbar.ui['hotbar-app']).HotbarApp.render)
+	local HotbarApp = getRoactRender((function()
+		local ok, r = pcall(function() return require(lplr.PlayerScripts.TS.controllers.global.hotbar.ui['hotbar-app']).HotbarApp.render end)
+		return ok and r or nil
+	end)())
+	if not HotbarApp then warn('[fix] Interface: HotbarApp missing') return end
 	local old, new = {}, {}
 	
 	vape:Clean(function()
@@ -9752,10 +10038,10 @@ run(function()
 		DefaultOpacity = 0.8,
 		Function = function(hue, sat, val, opacity)
 			local func = oldinvrender or HotbarOpenInventory.render
-			modifyconstant(debug.getupvalue(HotbarApp, 23).render, 51, tonumber(Color3.fromHSV(hue, sat, val):ToHex(), 16))
-			modifyconstant(debug.getupvalue(HotbarApp, 23).render, 58, tonumber(Color3.fromHSV(hue, sat, math.clamp(val > 0.5 and val - 0.2 or val + 0.2, 0, 1)):ToHex(), 16))
-			modifyconstant(debug.getupvalue(HotbarApp, 23).render, 54, 1 - opacity)
-			modifyconstant(debug.getupvalue(HotbarApp, 23).render, 55, math.clamp(1.2 - opacity, 0, 1))
+			modifyconstant((safeUpvalue(HotbarApp, 23) or {}).render, 51, tonumber(Color3.fromHSV(hue, sat, val):ToHex(), 16))
+			modifyconstant((safeUpvalue(HotbarApp, 23) or {}).render, 58, tonumber(Color3.fromHSV(hue, sat, math.clamp(val > 0.5 and val - 0.2 or val + 0.2, 0, 1)):ToHex(), 16))
+			modifyconstant((safeUpvalue(HotbarApp, 23) or {}).render, 54, 1 - opacity)
+			modifyconstant((safeUpvalue(HotbarApp, 23) or {}).render, 55, math.clamp(1.2 - opacity, 0, 1))
 			modifyconstant(func, 31, tonumber(Color3.fromHSV(hue, sat, val):ToHex(), 16))
 			modifyconstant(func, 32, math.clamp(1.2 - opacity, 0, 1))
 			modifyconstant(func, 34, tonumber(Color3.fromHSV(hue, sat, math.clamp(val > 0.5 and val - 0.2 or val + 0.2, 0, 1)):ToHex(), 16))
@@ -9912,7 +10198,7 @@ run(function()
 		end
 	})
 	local KillEffectName = {}
-	for i, v in bedwars.KillEffectMeta do
+	for i, v in (bedwars.KillEffectMeta or {}) do
 		table.insert(KillEffectName, v.name)
 		NameToId[v.name] = i
 	end
@@ -10139,7 +10425,11 @@ run(function()
 	local OpenInv
 	local KillFeed
 	local OldTabList
-	local HotbarApp = getRoactRender(require(lplr.PlayerScripts.TS.controllers.global.hotbar.ui['hotbar-app']).HotbarApp.render)
+	local HotbarApp = getRoactRender((function()
+		local ok, r = pcall(function() return require(lplr.PlayerScripts.TS.controllers.global.hotbar.ui['hotbar-app']).HotbarApp.render end)
+		return ok and r or nil
+	end)())
+	if not HotbarApp then warn('[fix] UICleanup: HotbarApp missing') return end
 	local HotbarOpenInventory = require(lplr.PlayerScripts.TS.controllers.global.hotbar.ui['hotbar-open-inventory']).HotbarOpenInventory
 	local old, new = {}, {}
 	local oldkillfeed
@@ -10222,8 +10512,8 @@ run(function()
 		Name = 'Resize Health',
 		Function = function(callback)
 			modifyconstant(HotbarApp, 60, callback and 1 or nil)
-			modifyconstant(debug.getupvalue(HotbarApp, 15).render, 30, callback and 1 or nil)
-			modifyconstant(debug.getupvalue(HotbarApp, 23).tweenPosition, 16, callback and 0 or nil)
+			modifyconstant((safeUpvalue(HotbarApp, 15) or {}).render, 30, callback and 1 or nil)
+			modifyconstant((safeUpvalue(HotbarApp, 23) or {}).tweenPosition, 16, callback and 0 or nil)
 		end,
 		Default = true
 	})
@@ -10231,7 +10521,7 @@ run(function()
 		Name = 'No Hotbar Numbers',
 		Function = function(callback)
 			local func = oldinvrender or HotbarOpenInventory.render
-			modifyconstant(debug.getupvalue(HotbarApp, 23).render, 90, callback and 0 or nil)
+			modifyconstant((safeUpvalue(HotbarApp, 23) or {}).render, 90, callback and 0 or nil)
 			modifyconstant(func, 71, callback and 0 or nil)
 		end,
 		Default = true
@@ -10416,7 +10706,7 @@ run(function()
 		Tooltip = 'Allows you to select any clientside win effect'
 	})
 	local WinEffectName = {}
-	for i, v in bedwars.WinEffectMeta do
+	for i, v in (bedwars.WinEffectMeta or {}) do
 		table.insert(WinEffectName, v.name)
 		NameToId[v.name] = i
 	end
@@ -10431,14 +10721,14 @@ run(function()
 	local FastPlace
 	local CPS
 
-	local old = bedwars.SharedConstants.BLOCK_PLACE_CPS
+	local old = bedwars.SharedConstants and bedwars.SharedConstants.BLOCK_PLACE_CPS or 12
 
 	FastPlace = vape.Categories.World:CreateModule({
 		Name = 'Fast Place',
 		Alias = {'CPS', 'Block'},
 		Tooltip = 'Changes place delay',
 		Function = function(call)
-			bedwars.SharedConstants.BLOCK_PLACE_CPS = call and CPS.Value or old
+			if bedwars.SharedConstants then bedwars.SharedConstants.BLOCK_PLACE_CPS = call and CPS.Value or old end
 		end
 	})
 	CPS = FastPlace:CreateSlider({
@@ -10448,7 +10738,7 @@ run(function()
 		Default = 13,
 		Function = function(val)
 			if FastPlace.Enabled then
-				bedwars.SharedConstants.BLOCK_PLACE_CPS = val
+				if bedwars.SharedConstants then bedwars.SharedConstants.BLOCK_PLACE_CPS = val end
 			end
 		end
 	})
@@ -11070,9 +11360,8 @@ run(function()
 				Percent:SetAttribute("Percent",99)
 				msg.Text = `Nuking {oppositeTeam} bed.. `
 				task.wait(0.85)
-				if not Breaker.Enabled then
-					Breaker:Toggle(true)
-				end
+				local nuker = vape.Modules.Nuker or vape.Modules.Breaker
+				if nuker and not nuker.Enabled then nuker:Toggle() end
 				EAW:Clean(lplr.PlayerGui.NotificationApp.DescendantAdded:Connect(function(obj)
 					obj:Destroy()
 				end))
@@ -11588,895 +11877,8 @@ run(function()
 	})
 end)
 
-run(function()
-	local KitSkins
-	local Players = playersService
-	local RunService = runService
-	local LocalPlayer = Players.LocalPlayer
-	local RS = replicatedStorage
+-- [FIX] KitSkins removed (duplicate of SkinChanger)
 
-	local CURRENT_ITEM_SKIN = "Victorious Lyla"
-	local CURRENT_SKIN_TYPE = "Nightmare"
-
-	local ok1, ItemType = pcall(function()
-		return require(RS.TS.item["item-type"]).ItemType
-	end)
-	if not ok1 then ItemType = {} end
-
-	local ok2, ItemSkinType = pcall(function()
-		return require(RS.TS.games.bedwars["item-skin"]["item-skin-types"]).ItemSkinType
-	end)
-	if not ok2 then ItemSkinType = {} end
-
-	local KitSkinCtrl
-	pcall(function()
-		local KC = require(RS.rbxts_include.node_modules["@easy-games"].knit.src).KnitClient
-		KitSkinCtrl = bedwars.KitSkinController
-	end)
-
-	local BOW_ROT = CFrame.Angles(0, math.rad(-90), 0)
-	local CROSSBOW_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(0, math.rad(-360), 0)
-	local LUNAR_CROSSBOW_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(0, -190, math.rad(-180))
-	local VICTORIOUS_ARCHER_BOW_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(0, -52, math.rad(90))
-	local VICTORIOUS_ARCHER_CROSSBOW_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(0, -190, math.rad(-180))
-	local VICTORIOUS_ARCHER_HEADHUNTER_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(0, math.rad(180), 0)
-	local HEADHUNTER_ROT = CFrame.new(0.4, 0, 0) * CFrame.Angles(0, math.rad(360), 0)
-	local AXE_ROT = CFrame.new(0, 0, -0.4) * CFrame.Angles(0, math.rad(90), 0)
-	local PICKAXE_ROT = CFrame.new(0, 0, -0.1) * CFrame.Angles(0, math.rad(110), 0)
-	local LASSO_ROT = CFrame.Angles(0, math.rad(90), 0)
-	local STAFF_ROT = CFrame.Angles(0, math.rad(90), 0)
-	local SWORD_ROT = CFrame.new(0, -1.7, 0) * CFrame.Angles(0, math.rad(-180), 0)
-	local HEARTBEAM_SWORD_ROT = CFrame.new(0, -1.2, 0) * CFrame.Angles(0, math.rad(0), 0)
-	local LIFE_BOW_ROT = CFrame.Angles(0, math.rad(-20), 0)
-	local DAO_ROT = CFrame.new(0, -1.7, 0) * CFrame.Angles(0, math.rad(-180), 0)
-	local VIC_ROT = CFrame.new(0, -1.9, 0) * CFrame.Angles(0, math.rad(360), 0)
-	local HEXED_DAO_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(0, 160, math.rad(-180))
-	local SNOW_DAO_ROT = CFrame.new(-0.2, -0.9, 0) * CFrame.Angles(0, math.rad(-180), 0)
-	local HARPOON_ROT = CFrame.new(0, -1.4, -0.15) * CFrame.Angles(0, math.rad(180), 0)
-	local TRIDENT_ROT = CFrame.new(0, 0.5, 0.05) * CFrame.Angles(0, math.rad(180), 0)
-	local LYLA_BOW_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(30, -30, 183.56)
-	local LYLA_CROSSBOW_ROT = CFrame.Angles(math.rad(0), math.rad(180), math.rad(0))
-	local LYLA_HEADHUNTER_ROT = CFrame.new(0, 0, 0) * CFrame.Angles(0, math.rad(0), 0)
-
-	local CANNON_HAND_SCALE = 0.34
-	local CANNON_PLACED_OFFSET = CFrame.new(0, -1.0, 0)
-	local CANNON_TOOL_NAME = "cannon"
-
-	local CANNON_SKIN_NAMES = {
-		["Victorious Cannon"] = {
-			Gold = "cannon_gold_victorious",
-			Platinum = "cannon_platinum_victorious",
-			Diamond = "cannon_diamond_victorious",
-			Emerald = "cannon_emerald_victorious",
-			Nightmare = "cannon_nightmare_victorious",
-		},
-		["Ghost Cannon"] = { Default = "cannon_ghost" },
-		["Deep Sea Cannon"] = { Default = "cannon_deepsea" },
-	}
-
-	local CANNON_SOUND_NAMES = {
-		Gold = "CANNON_FIRE_VICTORIOUS_NIGHTMARE",
-		Platinum = "CANNON_FIRE_VICTORIOUS_NIGHTMARE",
-		Diamond = "CANNON_FIRE_VICTORIOUS_DIAMOND",
-		Emerald = "CANNON_FIRE_VICTORIOUS_EMERALD",
-		Nightmare = "CANNON_FIRE_VICTORIOUS_NIGHTMARE",
-	}
-
-	local SKIN_OFFSETS = {
-		["nightmare_victorious_flower_bow"] = LYLA_BOW_ROT,
-		["emerald_victorious_flower_bow"] = LYLA_BOW_ROT,
-		["diamond_victorious_flower_bow"] = LYLA_BOW_ROT,
-		["platinum_victorious_flower_bow"] = LYLA_BOW_ROT,
-		["gold_victorious_flower_bow"] = LYLA_BOW_ROT,
-		["nightmare_victorious_flower_crossbow"] = LYLA_CROSSBOW_ROT,
-		["emerald_victorious_flower_crossbow"] = LYLA_CROSSBOW_ROT,
-		["diamond_victorious_flower_crossbow"] = LYLA_CROSSBOW_ROT,
-		["platinum_victorious_flower_crossbow"] = LYLA_CROSSBOW_ROT,
-		["gold_victorious_flower_crossbow"] = LYLA_CROSSBOW_ROT,
-		["nightmare_victorious_flower_headhunter"] = LYLA_HEADHUNTER_ROT,
-		["emerald_victorious_flower_headhunter"] = LYLA_HEADHUNTER_ROT,
-		["diamond_victorious_flower_headhunter"] = LYLA_HEADHUNTER_ROT,
-		["platinum_victorious_flower_headhunter"] = LYLA_HEADHUNTER_ROT,
-		["gold_victorious_flower_headhunter"] = LYLA_HEADHUNTER_ROT,
-		["tactical_headhunter_victorious_nightmare"] = VICTORIOUS_ARCHER_HEADHUNTER_ROT,
-		["tactical_headhunter_victorious_emerald"] = VICTORIOUS_ARCHER_HEADHUNTER_ROT,
-		["tactical_headhunter_victorious_diamond"] = VICTORIOUS_ARCHER_HEADHUNTER_ROT,
-		["tactical_headhunter_victorious_platinum"] = VICTORIOUS_ARCHER_HEADHUNTER_ROT,
-		["tactical_headhunter_victorious_gold"] = VICTORIOUS_ARCHER_HEADHUNTER_ROT,
-		["flower_bow_frost_queen"] = BOW_ROT,
-		["tactical_crossbow_lunar_dragon"] = LUNAR_CROSSBOW_ROT,
-		["life_bow_mummy"] = LIFE_BOW_ROT,
-		["flower_headhunter_frost_queen"] = HEADHUNTER_ROT,
-		["wood_sword_darkvalentine"] = SWORD_ROT,
-		["stone_sword_darkvalentine"] = SWORD_ROT,
-		["iron_sword_darkvalentine"] = SWORD_ROT,
-		["diamond_sword_darkvalentine"] = SWORD_ROT,
-		["emerald_sword_darkvalentine"] = SWORD_ROT,
-		["wood_sword_heartbeam"] = HEARTBEAM_SWORD_ROT,
-		["stone_sword_heartbeam"] = HEARTBEAM_SWORD_ROT,
-		["iron_sword_heartbeam"] = HEARTBEAM_SWORD_ROT,
-		["diamond_sword_heartbeam"] = HEARTBEAM_SWORD_ROT,
-		["emerald_sword_heartbeam"] = HEARTBEAM_SWORD_ROT,
-		["wood_bow_victorious_nightmare"] = VICTORIOUS_ARCHER_BOW_ROT,
-		["wood_bow_victorious_emerald"] = VICTORIOUS_ARCHER_BOW_ROT,
-		["wood_bow_victorious_diamond"] = VICTORIOUS_ARCHER_BOW_ROT,
-		["wood_bow_victorious_platinum"] = VICTORIOUS_ARCHER_BOW_ROT,
-		["wood_bow_victorious_gold"] = VICTORIOUS_ARCHER_BOW_ROT,
-		["tactical_crossbow_victorious_nightmare"] = VICTORIOUS_ARCHER_CROSSBOW_ROT,
-		["tactical_crossbow_victorious_emerald"] = VICTORIOUS_ARCHER_CROSSBOW_ROT,
-		["tactical_crossbow_victorious_diamond"] = VICTORIOUS_ARCHER_CROSSBOW_ROT,
-		["tactical_crossbow_victorious_platinum"] = VICTORIOUS_ARCHER_CROSSBOW_ROT,
-		["tactical_crossbow_victorious_gold"] = VICTORIOUS_ARCHER_CROSSBOW_ROT,
-		["life_crossbow_mummy"] = CROSSBOW_ROT,
-		["life_headhunter_mummy"] = HEADHUNTER_ROT,
-		["victorious_gold_triton"] = TRIDENT_ROT,
-		["victorious_platinum_triton"] = TRIDENT_ROT,
-		["victorious_diamond_triton"] = TRIDENT_ROT,
-		["victorious_emerald_triton"] = TRIDENT_ROT,
-		["victorious_nightmare_triton"] = TRIDENT_ROT,
-		["demon_triton"] = HARPOON_ROT,
-		["lasso_mummy"] = LASSO_ROT,
-		["lasso_wrangler_reindeer_lassy"] = LASSO_ROT,
-		["lasso_lifeguard"] = LASSO_ROT,
-		["wood_axe_darkvalentine"] = AXE_ROT,
-		["stone_axe_darkvalentine"] = AXE_ROT,
-		["iron_axe_darkvalentine"] = AXE_ROT,
-		["diamond_axe_darkvalentine"] = AXE_ROT,
-		["wood_axe_valentine"] = AXE_ROT,
-		["stone_axe_valentine"] = AXE_ROT,
-		["iron_axe_valentine"] = AXE_ROT,
-		["diamond_axe_valentine"] = AXE_ROT,
-		["wood_pickaxe_darkvalentine"] = PICKAXE_ROT,
-		["stone_pickaxe_darkvalentine"] = PICKAXE_ROT,
-		["iron_pickaxe_darkvalentine"] = PICKAXE_ROT,
-		["diamond_pickaxe_darkvalentine"] = PICKAXE_ROT,
-		["wood_pickaxe_valentine"] = PICKAXE_ROT,
-		["stone_pickaxe_valentine"] = PICKAXE_ROT,
-		["iron_pickaxe_valentine"] = PICKAXE_ROT,
-		["diamond_pickaxe_valentine"] = PICKAXE_ROT,
-		["gold_victorious_wizard_staff"] = STAFF_ROT,
-		["gold_victorious_wizard_staff_2"] = STAFF_ROT,
-		["gold_victorious_wizard_staff_3"] = STAFF_ROT,
-		["platinum_victorious_wizard_staff"] = STAFF_ROT,
-		["platinum_victorious_wizard_staff_2"] = STAFF_ROT,
-		["platinum_victorious_wizard_staff_3"] = STAFF_ROT,
-		["diamond_victorious_wizard_staff"] = STAFF_ROT,
-		["diamond_victorious_wizard_staff_2"] = STAFF_ROT,
-		["diamond_victorious_wizard_staff_3"] = STAFF_ROT,
-		["emerald_victorious_wizard_staff"] = STAFF_ROT,
-		["emerald_victorious_wizard_staff_2"] = STAFF_ROT,
-		["emerald_victorious_wizard_staff_3"] = STAFF_ROT,
-		["nightmare_victorious_wizard_staff"] = STAFF_ROT,
-		["nightmare_victorious_wizard_staff_2"] = STAFF_ROT,
-		["nightmare_victorious_wizard_staff_3"] = STAFF_ROT,
-		["wood_dao_victorious"] = VIC_ROT,
-		["stone_dao_victorious"] = VIC_ROT,
-		["iron_dao_victorious"] = VIC_ROT,
-		["diamond_dao_victorious"] = VIC_ROT,
-		["emerald_dao_victorious"] = VIC_ROT,
-		["wood_dao_cursed"] = HEXED_DAO_ROT,
-		["stone_dao_cursed"] = HEXED_DAO_ROT,
-		["iron_dao_cursed"] = HEXED_DAO_ROT,
-		["diamond_dao_cursed"] = HEXED_DAO_ROT,
-		["emerald_dao_cursed"] = HEXED_DAO_ROT,
-		["wood_dao_tiger"] = DAO_ROT,
-		["stone_dao_tiger"] = DAO_ROT,
-		["iron_dao_tiger"] = DAO_ROT,
-		["diamond_dao_tiger"] = DAO_ROT,
-		["emerald_dao_tiger"] = DAO_ROT,
-		["wood_dao_snow_rabbit"] = SNOW_DAO_ROT,
-		["stone_dao_snow_rabbit"] = SNOW_DAO_ROT,
-		["iron_dao_snow_rabbit"] = SNOW_DAO_ROT,
-		["diamond_dao_snow_rabbit"] = SNOW_DAO_ROT,
-		["emerald_dao_snow_rabbit"] = SNOW_DAO_ROT,
-	}
-
-	local KIT_SKIN_MAP = {
-		["Victorious Lyla"] = { Gold = "gold_victorious_lyla", Platinum = "platinum_victorious_lyla", Diamond = "diamond_victorious_lyla", Emerald = "emerald_victorious_lyla", Nightmare = "nightmare_victorious_lyla" },
-		["Frost Queen Lyla"] = { Default = "flower_bee_frost_queen" },
-		["Victorious Archer"] = { Gold = "archer_victorious_gold", Platinum = "archer_victorious_platinum", Diamond = "archer_victorious_diamond", Emerald = "archer_victorious_emerald", Nightmare = "archer_victorious_nightmare" },
-		["Lunar Dragon Archer"] = { Default = "archer_lunar_dragon" },
-		["Victorious Yuzi"] = { Default = "yuzi_victorious" },
-		["Hexed Yuzi"] = { Default = "dasher_cursed" },
-		["Tiger Yuzi"] = { Default = "dasher_tiger" },
-		["Snow Rabbit Yuzi"] = { Default = "dasher_snow_rabbit" },
-		["Victorious Zeno"] = { Gold = "gold_victorious_wizard", Platinum = "platinum_victorious_wizard", Diamond = "diamond_victorious_wizard", Emerald = "emerald_victorious_wizard", Nightmare = "nightmare_victorious_wizard" },
-		["Victorious Triton"] = { Gold = "victorious_gold_triton", Platinum = "victorious_platinum_triton", Diamond = "victorious_diamond_triton", Emerald = "victorious_emerald_triton", Nightmare = "victorious_nightmare_triton" },
-		["Demon Triton"] = { Default = "demon_triton" },
-		["Mummy Life Bow"] = { Default = "mummy_nazar" },
-		["Mummy Lasso"] = { Default = "cowgirl_mummy" },
-		["Victorious Cannon"] = { Gold = "gold_victorious_davey", Platinum = "platinum_victorious_davey", Diamond = "diamond_victorious_davey", Emerald = "emerald_victorious_davey", Nightmare = "nightmare_victorious_davey" },
-		["Ghost Cannon"] = { Default = "davey_ghost" },
-		["Deep Sea Cannon"] = { Default = "davey_deepsea" },
-	}
-
-	local STORE_SKIN_MAP = {
-		["Balloon Swords"] = function() return { { ItemType.WOOD_SWORD, ItemSkinType.BALLOON_WOOD_SWORD }, { ItemType.STONE_SWORD, ItemSkinType.BALLOON_STONE_SWORD }, { ItemType.IRON_SWORD, ItemSkinType.BALLOON_IRON_SWORD }, { ItemType.DIAMOND_SWORD, ItemSkinType.BALLOON_DIAMOND_SWORD }, { ItemType.EMERALD_SWORD, ItemSkinType.BALLOON_EMERALD_SWORD } } end,
-		["Banana Swords"] = function() return { { ItemType.WOOD_SWORD, ItemSkinType.BANANA_WOOD_SWORD }, { ItemType.STONE_SWORD, ItemSkinType.BANANA_STONE_SWORD }, { ItemType.IRON_SWORD, ItemSkinType.BANANA_IRON_SWORD }, { ItemType.DIAMOND_SWORD, ItemSkinType.BANANA_DIAMOND_SWORD }, { ItemType.EMERALD_SWORD, ItemSkinType.BANANA_EMERALD_SWORD } } end,
-		["Valentine Pack"] = function() return { 
-			{ ItemType.WOOD_SWORD, ItemSkinType.VALENTINE_WOOD_SWORD }, { ItemType.STONE_SWORD, ItemSkinType.VALENTINE_STONE_SWORD }, { ItemType.IRON_SWORD, ItemSkinType.VALENTINE_IRON_SWORD }, { ItemType.DIAMOND_SWORD, ItemSkinType.VALENTINE_DIAMOND_SWORD }, { ItemType.EMERALD_SWORD, ItemSkinType.VALENTINE_EMERALD_SWORD },
-			{ ItemType.WOOD_PICKAXE, ItemSkinType.VALENTINE_WOOD_PICKAXE }, { ItemType.STONE_PICKAXE, ItemSkinType.VALENTINE_STONE_PICKAXE }, { ItemType.IRON_PICKAXE, ItemSkinType.VALENTINE_IRON_PICKAXE }, { ItemType.DIAMOND_PICKAXE, ItemSkinType.VALENTINE_DIAMOND_PICKAXE },
-			{ ItemType.WOOD_AXE, ItemSkinType.VALENTINE_WOOD_AXE }, { ItemType.STONE_AXE, ItemSkinType.VALENTINE_STONE_AXE }, { ItemType.IRON_AXE, ItemSkinType.VALENTINE_IRON_AXE }, { ItemType.DIAMOND_AXE, ItemSkinType.VALENTINE_DIAMOND_AXE }
-		} end,
-		["Darkheart Pack"] = function() return { 
-			{ ItemType.WOOD_SWORD, ItemSkinType.DARKVALENTINE_WOOD_SWORD }, { ItemType.STONE_SWORD, ItemSkinType.DARKVALENTINE_STONE_SWORD }, { ItemType.IRON_SWORD, ItemSkinType.DARKVALENTINE_IRON_SWORD }, { ItemType.DIAMOND_SWORD, ItemSkinType.DARKVALENTINE_DIAMOND_SWORD }, { ItemType.EMERALD_SWORD, ItemSkinType.DARKVALENTINE_EMERALD_SWORD },
-			{ ItemType.WOOD_PICKAXE, ItemSkinType.DARKVALENTINE_WOOD_PICKAXE }, { ItemType.STONE_PICKAXE, ItemSkinType.DARKVALENTINE_STONE_PICKAXE }, { ItemType.IRON_PICKAXE, ItemSkinType.DARKVALENTINE_IRON_PICKAXE }, { ItemType.DIAMOND_PICKAXE, ItemSkinType.DARKVALENTINE_DIAMOND_PICKAXE },
-			{ ItemType.WOOD_AXE, ItemSkinType.DARKVALENTINE_WOOD_AXE }, { ItemType.STONE_AXE, ItemSkinType.DARKVALENTINE_STONE_AXE }, { ItemType.IRON_AXE, ItemSkinType.DARKVALENTINE_IRON_AXE }, { ItemType.DIAMOND_AXE, ItemSkinType.DARKVALENTINE_DIAMOND_AXE }
-		} end,
-		["Heartbeam Swords"] = function() return { { ItemType.WOOD_SWORD, ItemSkinType.HEARTBEAM_WOOD_SWORD }, { ItemType.STONE_SWORD, ItemSkinType.HEARTBEAM_STONE_SWORD }, { ItemType.IRON_SWORD, ItemSkinType.HEARTBEAM_IRON_SWORD }, { ItemType.DIAMOND_SWORD, ItemSkinType.HEARTBEAM_DIAMOND_SWORD }, { ItemType.EMERALD_SWORD, ItemSkinType.HEARTBEAM_EMERALD_SWORD } } end,
-		["Mummy Life Bow"] = function() return { { ItemType.LIFE_BOW, ItemSkinType.LIFE_BOW_MUMMY }, { ItemType.LIFE_CROSSBOW, ItemSkinType.LIFE_CROSSBOW_MUMMY }, { ItemType.LIFE_HEADHUNTER, ItemSkinType.LIFE_HEADHUNTER_MUMMY } } end,
-		["Mummy Lasso"] = function() return { { ItemType.LASSO, ItemSkinType.LASSO_MUMMY } } end,
-	}
-
-	local function yuziDaoMap(suffix)
-		return {
-			wood_dao = "wood_dao_" .. suffix,
-			stone_dao = "stone_dao_" .. suffix,
-			iron_dao = "iron_dao_" .. suffix,
-			diamond_dao = "diamond_dao_" .. suffix,
-			emerald_dao = "emerald_dao_" .. suffix,
-		}
-	end
-
-	local SKIN_DATA = {
-		["Victorious Lyla"] = function(t)
-			local lt = t:lower()
-			return {
-				flower_bow = lt .. "_victorious_flower_bow",
-				flower_crossbow = lt .. "_victorious_flower_crossbow",
-				flower_headhunter = lt .. "_victorious_flower_headhunter",
-			}
-		end,
-		["Frost Queen Lyla"] = function()
-			return {
-				flower_bow = "flower_bow_frost_queen",
-				flower_crossbow = "flower_crossbow_frost_queen",
-				flower_headhunter = "flower_headhunter_frost_queen",
-			}
-		end,
-		["Victorious Archer"] = function(t)
-			local lt = t:lower()
-			return {
-				wood_bow = "wood_bow_victorious_" .. lt,
-				tactical_crossbow = "tactical_crossbow_victorious_" .. lt,
-				tactical_headhunter = "tactical_headhunter_victorious_" .. lt,
-			}
-		end,
-		["Lunar Dragon Archer"] = function()
-			return {
-				wood_bow = "wood_bow_lunar_dragon",
-				tactical_crossbow = "tactical_crossbow_lunar_dragon",
-				tactical_headhunter = "tactical_headhunter_lunar_dragon",
-			}
-		end,
-		["Victorious Triton"] = function(t)
-			return { harpoon = "victorious_" .. t:lower() .. "_triton" }
-		end,
-		["Demon Triton"] = function() return { harpoon = "demon_triton" } end,
-		["Victorious Yuzi"] = function() return yuziDaoMap("victorious") end,
-		["Hexed Yuzi"] = function() return yuziDaoMap("cursed") end,
-		["Tiger Yuzi"] = function() return yuziDaoMap("tiger") end,
-		["Snow Rabbit Yuzi"] = function() return yuziDaoMap("snow_rabbit") end,
-		["Victorious Zeno"] = function(t)
-			local lt = t:lower()
-			return {
-				wizard_staff = lt .. "_victorious_wizard_staff",
-				wizard_staff_2 = lt .. "_victorious_wizard_staff_2",
-				wizard_staff_3 = lt .. "_victorious_wizard_staff_3",
-			}
-		end,
-		["Balloon Swords"] = function() return { wood_sword = "balloon_wood_sword", stone_sword = "balloon_stone_sword", iron_sword = "balloon_iron_sword", diamond_sword = "balloon_diamond_sword", emerald_sword = "balloon_emerald_sword" } end,
-		["Banana Swords"] = function() return { wood_sword = "banana_wood_sword", stone_sword = "banana_stone_sword", iron_sword = "banana_iron_sword", diamond_sword = "banana_diamond_sword", emerald_sword = "banana_emerald_sword" } end,
-		["Valentine Pack"] = function() return { 
-			wood_sword = "wood_sword_valentine", stone_sword = "stone_sword_valentine", iron_sword = "iron_sword_valentine", diamond_sword = "diamond_sword_valentine", emerald_sword = "emerald_sword_valentine",
-			wood_pickaxe = "wood_pickaxe_valentine", stone_pickaxe = "stone_pickaxe_valentine", iron_pickaxe = "iron_pickaxe_valentine", diamond_pickaxe = "diamond_pickaxe_valentine",
-			wood_axe = "wood_axe_valentine", stone_axe = "stone_axe_valentine", iron_axe = "iron_axe_valentine", diamond_axe = "diamond_axe_valentine"
-		} end,
-		["Darkheart Pack"] = function() return { 
-			wood_sword = "wood_sword_darkvalentine", stone_sword = "stone_sword_darkvalentine", iron_sword = "iron_sword_darkvalentine", diamond_sword = "diamond_sword_darkvalentine", emerald_sword = "emerald_sword_darkvalentine",
-			wood_pickaxe = "wood_pickaxe_darkvalentine", stone_pickaxe = "stone_pickaxe_darkvalentine", iron_pickaxe = "iron_pickaxe_darkvalentine", diamond_pickaxe = "diamond_pickaxe_darkvalentine",
-			wood_axe = "wood_axe_darkvalentine", stone_axe = "stone_axe_darkvalentine", iron_axe = "iron_axe_darkvalentine", diamond_axe = "diamond_axe_darkvalentine"
-		} end,
-		["Heartbeam Swords"] = function() return { wood_sword = "wood_sword_heartbeam", stone_sword = "stone_sword_heartbeam", iron_sword = "iron_sword_heartbeam", diamond_sword = "diamond_sword_heartbeam", emerald_sword = "emerald_sword_heartbeam" } end,
-		["Mummy Lasso"] = function() return { lasso = "lasso_mummy" } end,
-		["Mummy Life Bow"] = function() return { life_bow = "life_bow_mummy", life_crossbow = "life_crossbow_mummy", life_headhunter = "life_headhunter_mummy" } end,
-	}
-
-	local TIERED_SKINS = {
-		["Victorious Lyla"] = true,
-		["Victorious Archer"] = true,
-		["Victorious Zeno"] = true,
-		["Victorious Triton"] = true,
-		["Victorious Cannon"] = true,
-	}
-
-	local function normalizeName(s)
-		return s:lower():gsub("[_%s%-]", "")
-	end
-
-	local function isCannonSkin()
-		return CANNON_SKIN_NAMES[CURRENT_ITEM_SKIN] ~= nil
-	end
-
-	local function getCurrentCannonSkinName()
-		local tbl = CANNON_SKIN_NAMES[CURRENT_ITEM_SKIN]
-		if not tbl then return nil end
-		return tbl[CURRENT_SKIN_TYPE] or tbl.Default
-	end
-
-	local function getCannonSkinSource(skinName)
-		local assets = RS:FindFirstChild("Assets")
-		if not assets then return nil end
-		local blocks = assets:FindFirstChild("Blocks")
-		if not blocks then return nil end
-		return blocks:FindFirstChild(skinName)
-	end
-
-	local function keepOriginalInvisible(tool)
-		local conn
-		conn = RunService.RenderStepped:Connect(function()
-			if not tool or not tool.Parent then
-				conn:Disconnect()
-				return
-			end
-			for _, d in ipairs(tool:GetDescendants()) do
-				if d:IsA("BasePart") and not d:IsDescendantOf(tool:FindFirstChild("LOCAL_ITEM_RESKIN") or game) then
-					d.LocalTransparencyModifier = 1
-					d.Transparency = 1
-				elseif (d:IsA("Decal") or d:IsA("Texture")) and not d:IsDescendantOf(tool:FindFirstChild("LOCAL_ITEM_RESKIN") or game) then
-					d.Transparency = 1
-				end
-			end
-		end)
-		table.insert(connections, conn)
-	end
-
-	local function getCurrentMappings()
-		local fn = SKIN_DATA[CURRENT_ITEM_SKIN]
-		if not fn then return {} end
-		return fn(CURRENT_SKIN_TYPE) or {}
-	end
-
-	local function getKitSkinValue()
-		local m = KIT_SKIN_MAP[CURRENT_ITEM_SKIN]
-		if not m then return nil end
-		return m[CURRENT_SKIN_TYPE] or m.Default
-	end
-
-	local function getStoreSkins()
-		local fn = STORE_SKIN_MAP[CURRENT_ITEM_SKIN]
-		if not fn then return {} end
-		return fn() or {}
-	end
-
-	local tagged = setmetatable({}, { __mode = "k" })
-	local connections = {}
-	local oldGetKitSkin = nil
-	local savedStoreSkins = {}
-
-	local cannonTagged = setmetatable({}, { __mode = "k" })
-	local cannonConnections = {}
-	local cannonRenderConns = {}
-	local oldFireCannon, oldLaunchSelf
-	local soundsHooked = false
-
-	local function firstBasePart(root)
-		for _, d in ipairs(root:GetDescendants()) do
-			if d:IsA("BasePart") then return d end
-		end
-	end
-
-	local function makeInvisible(root)
-		for _, d in ipairs(root:GetDescendants()) do
-			if d:IsA("BasePart") then
-				d.LocalTransparencyModifier = 1
-				d.Transparency = 1
-			elseif d:IsA("Decal") or d:IsA("Texture") then
-				d.Transparency = 1
-			end
-		end
-	end
-
-	local function restoreVisibility(root)
-		for _, d in ipairs(root:GetDescendants()) do
-			if d:IsA("BasePart") then
-				d.LocalTransparencyModifier = 0
-				d.Transparency = 0
-			elseif d:IsA("Decal") or d:IsA("Texture") then
-				d.Transparency = 0
-			end
-		end
-	end
-
-	local function setNoCollide(model)
-		for _, d in ipairs(model:GetDescendants()) do
-			if d:IsA("BasePart") then
-				d.CanCollide = false
-				d.CanTouch = false
-				d.CanQuery = false
-				d.Massless = true
-				d.Anchored = false
-			end
-		end
-	end
-
-	local function weldAllTo(anchor, container)
-		for _, d in ipairs(container:GetDescendants()) do
-			if d:IsA("BasePart") and d ~= anchor then
-				local wc = Instance.new("WeldConstraint")
-				wc.Part0 = anchor
-				wc.Part1 = d
-				wc.Parent = anchor
-			end
-		end
-	end
-
-	local function attachReskin(tool, skinName)
-		if not tool or tagged[tool] then return end
-		tagged[tool] = true
-
-		local origHandle = tool:FindFirstChild("Handle")
-		if not (origHandle and origHandle:IsA("BasePart")) then
-			origHandle = firstBasePart(tool)
-		end
-		if not origHandle then tagged[tool] = nil; return end
-
-		local itemsFolder = RS:FindFirstChild("Items")
-		if not itemsFolder then tagged[tool] = nil; return end
-		local source = itemsFolder:FindFirstChild(skinName)
-		if not source then tagged[tool] = nil; return end
-
-		makeInvisible(tool)
-
-		local clone = source:Clone()
-		clone.Name = "LOCAL_ITEM_RESKIN"
-		for _, d in ipairs(clone:GetDescendants()) do
-			if d:IsA("Script") or d:IsA("LocalScript") or d:IsA("ModuleScript") then
-				pcall(d.Destroy, d)
-			end
-		end
-
-		setNoCollide(clone)
-		clone.Parent = tool
-
-		local cloneAnchor = clone:FindFirstChild("Handle")
-		if not (cloneAnchor and cloneAnchor:IsA("BasePart")) then
-			if clone:IsA("Model") then
-				if not clone.PrimaryPart then
-					local p = firstBasePart(clone)
-					if p then pcall(function() clone.PrimaryPart = p end) end
-				end
-				cloneAnchor = clone.PrimaryPart
-			end
-			cloneAnchor = cloneAnchor or firstBasePart(clone)
-		end
-
-		if not cloneAnchor then
-			clone:Destroy(); restoreVisibility(tool); tagged[tool] = nil; return
-		end
-
-		pcall(function() cloneAnchor.CFrame = origHandle.CFrame end)
-		weldAllTo(cloneAnchor, clone)
-
-		local w = Instance.new("Weld")
-		w.Part0 = origHandle
-		w.Part1 = cloneAnchor
-		w.C0 = SKIN_OFFSETS[skinName] or CFrame.identity
-		w.C1 = CFrame.identity
-		w.Parent = cloneAnchor
-	end
-
-	local function weldAllToPrimary(model)
-		local primary = model.PrimaryPart
-		if not primary then return end
-		for _, d in ipairs(model:GetDescendants()) do
-			if d:IsA("BasePart") and d ~= primary then
-				local wc = Instance.new("WeldConstraint")
-				wc.Part0 = primary
-				wc.Part1 = d
-				wc.Parent = primary
-			end
-		end
-	end
-
-	local function attachCannonReskin(targetRoot, posOffset, heldScale)
-		if not targetRoot or cannonTagged[targetRoot] then return end
-		cannonTagged[targetRoot] = true
-
-		local targetPart = targetRoot:FindFirstChild("Handle")
-		if not (targetPart and targetPart:IsA("BasePart")) then
-			targetPart = firstBasePart(targetRoot)
-		end
-		if not targetPart then cannonTagged[targetRoot] = nil; return end
-
-		local skinName = getCurrentCannonSkinName()
-		if not skinName then cannonTagged[targetRoot] = nil; return end
-		local source = getCannonSkinSource(skinName)
-		if not source then cannonTagged[targetRoot] = nil; return end
-
-		makeInvisible(targetRoot)
-
-		local clone = source:Clone()
-		clone.Name = "LOCAL_CANNON_RESKIN"
-		for _, d in ipairs(clone:GetDescendants()) do
-			if d:IsA("Script") or d:IsA("LocalScript") or d:IsA("ModuleScript") then
-				pcall(d.Destroy, d)
-			end
-		end
-
-		if not clone:IsA("Model") then
-			setNoCollide(clone)
-			clone.Parent = targetRoot
-			return
-		end
-
-		if not clone.PrimaryPart then
-			local p = firstBasePart(clone)
-			if p then pcall(function() clone.PrimaryPart = p end) end
-		end
-		if not clone.PrimaryPart then
-			clone:Destroy(); cannonTagged[targetRoot] = nil; return
-		end
-
-		if heldScale and heldScale ~= 1 then
-			pcall(function() clone:ScaleTo(heldScale) end)
-		end
-
-		setNoCollide(clone)
-		clone.Parent = targetRoot
-
-		local offset = posOffset or CFrame.identity
-		pcall(function() clone:PivotTo(targetPart.CFrame * offset) end)
-
-		weldAllToPrimary(clone)
-
-		local wc = Instance.new("WeldConstraint")
-		wc.Part0 = targetPart
-		wc.Part1 = clone.PrimaryPart
-		wc.Parent = clone.PrimaryPart
-	end
-
-	local function hookCannonThirdPerson(character)
-		local function onChildAdded(child)
-			if not (child:IsA("Tool") and child.Name == CANNON_TOOL_NAME) then return end
-			task.wait()
-
-			local handle = child:FindFirstChild("Handle") or firstBasePart(child)
-			if not handle then return end
-
-			local existing = child:FindFirstChild("LOCAL_CANNON_RESKIN")
-			if existing then existing:Destroy(); cannonTagged[child] = nil end
-
-			attachCannonReskin(child, CFrame.identity, CANNON_HAND_SCALE)
-
-			local start = time()
-			local conn
-			conn = RunService.RenderStepped:Connect(function()
-				if not child.Parent then conn:Disconnect(); return end
-				makeInvisible(child)
-				if time() - start > 3 then conn:Disconnect() end
-			end)
-			table.insert(cannonRenderConns, conn)
-		end
-
-		for _, c in ipairs(character:GetChildren()) do onChildAdded(c) end
-		local conn = character.ChildAdded:Connect(onChildAdded)
-		table.insert(cannonConnections, conn)
-	end
-
-	local function hookCannonViewmodel()
-		local cam = workspace.CurrentCamera
-		if not cam then return end
-		local function hookVM(vm)
-			for _, child in ipairs(vm:GetChildren()) do
-				if child.Name == CANNON_TOOL_NAME then
-					attachCannonReskin(child, CFrame.identity, CANNON_HAND_SCALE)
-				end
-			end
-			local conn = vm.ChildAdded:Connect(function(child)
-				if child.Name == CANNON_TOOL_NAME then
-					task.wait()
-					attachCannonReskin(child, CFrame.identity, CANNON_HAND_SCALE)
-				end
-			end)
-			table.insert(cannonConnections, conn)
-		end
-		local vm = cam:FindFirstChild("Viewmodel")
-		if vm then hookVM(vm) end
-		local conn = cam.ChildAdded:Connect(function(child)
-			if child.Name == "Viewmodel" then task.wait(); hookVM(child) end
-		end)
-		table.insert(cannonConnections, conn)
-	end
-
-	local function hookCannonContainer(container)
-		if not container then return end
-		for _, child in ipairs(container:GetChildren()) do
-			if child.Name == CANNON_TOOL_NAME then
-				attachCannonReskin(child, CFrame.identity, CANNON_HAND_SCALE)
-			end
-		end
-		local conn = container.ChildAdded:Connect(function(child)
-			if child.Name == CANNON_TOOL_NAME then
-				task.wait()
-				attachCannonReskin(child, CFrame.identity, CANNON_HAND_SCALE)
-			end
-		end)
-		table.insert(cannonConnections, conn)
-	end
-
-	local function hookCannonBlocksFolder(blocksFolder)
-		for _, child in ipairs(blocksFolder:GetChildren()) do
-			if child.Name == CANNON_TOOL_NAME then
-				attachCannonReskin(child, CANNON_PLACED_OFFSET, 1)
-			end
-		end
-		local conn = blocksFolder.ChildAdded:Connect(function(child)
-			if child.Name == CANNON_TOOL_NAME then
-				task.wait()
-				attachCannonReskin(child, CANNON_PLACED_OFFSET, 1)
-			end
-		end)
-		table.insert(cannonConnections, conn)
-	end
-
-	local function hookAllWorldCannons()
-		local map = workspace:FindFirstChild("Map")
-		if not map then return end
-		local worlds = map:FindFirstChild("Worlds")
-		if not worlds then return end
-		for _, world in ipairs(worlds:GetChildren()) do
-			local blocks = world:FindFirstChild("Blocks")
-			if blocks then hookCannonBlocksFolder(blocks) end
-		end
-		local conn = worlds.ChildAdded:Connect(function(world)
-			task.wait()
-			local blocks = world:FindFirstChild("Blocks")
-			if blocks then hookCannonBlocksFolder(blocks) end
-		end)
-		table.insert(cannonConnections, conn)
-	end
-
-	local function hookCannonSounds()
-		if soundsHooked then return end
-		if not (bedwars and bedwars.CannonHandController) then return end
-		soundsHooked = true
-		oldFireCannon = bedwars.CannonHandController.fireCannon
-		oldLaunchSelf = bedwars.CannonHandController.launchSelf
-
-		local function replaceSound()
-			for _, v in ipairs(workspace.SoundPool:GetChildren()) do
-				if v:IsA("Sound") and v.SoundId == "rbxassetid://7121064180" then v:Destroy() end
-			end
-			local key = CANNON_SOUND_NAMES[CURRENT_SKIN_TYPE] or CANNON_SOUND_NAMES.Nightmare
-			if bedwars.SoundManager and bedwars.SoundList and bedwars.SoundList[key] then
-				bedwars.SoundManager:playSound(bedwars.SoundList[key])
-			end
-		end
-
-		bedwars.CannonHandController.fireCannon = function(...) replaceSound(); return oldFireCannon(...) end
-		bedwars.CannonHandController.launchSelf = function(...) replaceSound(); return oldLaunchSelf(...) end
-	end
-
-	local function unhookCannonSounds()
-		if soundsHooked and bedwars and bedwars.CannonHandController then
-			if oldFireCannon then bedwars.CannonHandController.fireCannon = oldFireCannon end
-			if oldLaunchSelf then bedwars.CannonHandController.launchSelf = oldLaunchSelf end
-		end
-		oldFireCannon = nil; oldLaunchSelf = nil; soundsHooked = false
-	end
-
-	local function cleanupCannons()
-		for _, c in pairs(cannonConnections) do pcall(function() c:Disconnect() end) end
-		for _, c in pairs(cannonRenderConns) do pcall(function() c:Disconnect() end) end
-		table.clear(cannonConnections)
-		table.clear(cannonRenderConns)
-
-		for root in pairs(cannonTagged) do
-			if root and root.Parent then
-				local r = root:FindFirstChild("LOCAL_CANNON_RESKIN")
-				if r then r:Destroy() end
-				restoreVisibility(root)
-			end
-		end
-		table.clear(cannonTagged)
-
-		local map = workspace:FindFirstChild("Map")
-		if map then
-			local worlds = map:FindFirstChild("Worlds")
-			if worlds then
-				for _, world in ipairs(worlds:GetChildren()) do
-					local blocks = world:FindFirstChild("Blocks")
-					if blocks then
-						for _, child in ipairs(blocks:GetChildren()) do
-							if child.Name == CANNON_TOOL_NAME then
-								local r = child:FindFirstChild("LOCAL_CANNON_RESKIN")
-								if r then r:Destroy() end
-								restoreVisibility(child)
-							end
-						end
-					end
-				end
-			end
-		end
-
-		unhookCannonSounds()
-	end
-
-	local function applyKitSkinHook()
-		if not KitSkinCtrl then return end
-		local val = getKitSkinValue()
-		if not val then return end
-		if not oldGetKitSkin then oldGetKitSkin = KitSkinCtrl.getKitSkin end
-		KitSkinCtrl.getKitSkin = function(self, char)
-			if char == LocalPlayer.Character then return val end
-			return oldGetKitSkin(self, char)
-		end
-	end
-
-	local function removeKitSkinHook()
-		if KitSkinCtrl and oldGetKitSkin then
-			KitSkinCtrl.getKitSkin = oldGetKitSkin
-			oldGetKitSkin = nil
-		end
-	end
-
-	local function applyStoreSkins()
-		if not (bedwars and bedwars.Store) then return end
-		local skins = getStoreSkins()
-		savedStoreSkins = {}
-		local state = bedwars.Store:getState()
-		for _, pair in ipairs(skins) do
-			if pair[1] and pair[2] then
-				local prev = state.Locker and state.Locker.selectedItemSkins and state.Locker.selectedItemSkins[pair[1]]
-				table.insert(savedStoreSkins, { pair[1], prev })
-				pcall(function() bedwars.Store:dispatch({ type = "LockerSetItemSkin", itemType = pair[1], itemSkin = pair[2] }) end)
-			end
-		end
-	end
-
-	local function clearStoreSkins()
-		if not (bedwars and bedwars.Store) then return end
-		for _, saved in ipairs(savedStoreSkins) do
-			pcall(function() bedwars.Store:dispatch({ type = "LockerSetItemSkin", itemType = saved[1], itemSkin = saved[2] }) end)
-		end
-		savedStoreSkins = {}
-	end
-
-	local function tryApply(child)
-		if isCannonSkin() then return end
-		local mappings = getCurrentMappings()
-
-		local skinName = mappings[child.Name:lower()]
-
-		if not skinName then
-			local childNorm = normalizeName(child.Name)
-			for k, v in pairs(mappings) do
-				if normalizeName(k) == childNorm then skinName = v; break end
-			end
-		end
-
-		if not skinName then return end
-		task.wait()
-		if child.Parent then attachReskin(child, skinName) end
-	end
-
-	local function hookViewmodel()
-		local cam = workspace.CurrentCamera
-		if not cam then return end
-		local function hookVM(vm)
-			for _, child in ipairs(vm:GetChildren()) do tryApply(child) end
-			table.insert(connections, vm.ChildAdded:Connect(tryApply))
-		end
-		local vm = cam:FindFirstChild("Viewmodel")
-		if vm then hookVM(vm) end
-		table.insert(connections, cam.ChildAdded:Connect(function(child)
-			if child.Name == "Viewmodel" then task.wait(); hookVM(child) end
-		end))
-	end
-
-	local function hookContainer(container)
-		if not container then return end
-		for _, child in ipairs(container:GetChildren()) do tryApply(child) end
-		table.insert(connections, container.ChildAdded:Connect(tryApply))
-	end
-
-	local function onCharacterAdded(character)
-		task.wait(0.2)
-		applyKitSkinHook()
-		if isCannonSkin() then
-			hookCannonContainer(LocalPlayer.Backpack)
-			hookCannonContainer(character)
-			hookCannonThirdPerson(character)
-		else
-			hookContainer(LocalPlayer.Backpack)
-			hookContainer(character)
-		end
-	end
-
-	local function cleanup()
-		for _, c in pairs(connections) do pcall(function() c:Disconnect() end) end
-		table.clear(connections)
-		for root in pairs(tagged) do
-			if root and root.Parent then
-				local r = root:FindFirstChild("LOCAL_ITEM_RESKIN")
-				if r then r:Destroy() end
-				restoreVisibility(root)
-			end
-		end
-		table.clear(tagged)
-		removeKitSkinHook()
-		clearStoreSkins()
-		cleanupCannons()
-	end
-
-	local skinNames = {}
-	for name in pairs(SKIN_DATA) do table.insert(skinNames, name) end
-	for name in pairs(CANNON_SKIN_NAMES) do table.insert(skinNames, name) end
-	table.sort(skinNames)
-
-	local SkinTypeDropdown
-
-	KitSkins = vape.Categories.Render:CreateModule({
-		Name = "KitSkins",
-		Function = function(enabled)
-			if enabled then
-				if isCannonSkin() then
-					hookCannonViewmodel()
-					hookAllWorldCannons()
-					hookCannonSounds()
-					applyKitSkinHook()
-					if LocalPlayer.Character then
-						hookCannonContainer(LocalPlayer.Backpack)
-						hookCannonContainer(LocalPlayer.Character)
-						hookCannonThirdPerson(LocalPlayer.Character)
-					end
-				else
-					hookViewmodel()
-					applyKitSkinHook()
-					applyStoreSkins()
-					if LocalPlayer.Character then onCharacterAdded(LocalPlayer.Character) end
-				end
-				table.insert(connections, LocalPlayer.CharacterAdded:Connect(onCharacterAdded))
-			else
-				cleanup()
-			end
-		end,
-		Tooltip = "Client-sided item skin changer",
-	})
-
-	KitSkins:CreateDropdown({
-		Name = "Item Skin",
-		List = skinNames,
-		Default = CURRENT_ITEM_SKIN,
-		Function = function(val)
-			CURRENT_ITEM_SKIN = val
-			if SkinTypeDropdown and SkinTypeDropdown.Object then
-				SkinTypeDropdown.Object.Visible = TIERED_SKINS[val] == true
-			end
-			if KitSkins.Enabled then KitSkins:Toggle(); KitSkins:Toggle() end
-		end,
-	})
-
-	SkinTypeDropdown = KitSkins:CreateDropdown({
-		Name = "Skin Type",
-		List = { "Gold", "Platinum", "Diamond", "Emerald", "Nightmare", "Default" },
-		Default = CURRENT_SKIN_TYPE,
-		Function = function(val)
-			CURRENT_SKIN_TYPE = val
-			if KitSkins.Enabled then KitSkins:Toggle(); KitSkins:Toggle() end
-		end,
-	})
-
-	task.defer(function()
-		if SkinTypeDropdown and SkinTypeDropdown.Object then
-			SkinTypeDropdown.Object.Visible = TIERED_SKINS[CURRENT_ITEM_SKIN] == true
-		end
-		if SkinTypeDropdown and SkinTypeDropdown.Set then
-			SkinTypeDropdown:Set(CURRENT_SKIN_TYPE)
-		end
-	end)
-end)
 
 run(function()
 	local PotatoMode
@@ -12755,7 +12157,8 @@ run(function()
 
     local function getKitMeta(player)
         local kit = player:GetAttribute('PlayingAsKits') or player:GetAttribute('PlayingAsKit') or 'none'
-        return bedwars.BedwarsKitMeta[kit] or bedwars.BedwarsKitMeta.none
+        local km = bedwars.BedwarsKitMeta or {}
+		return km[kit] or km.none or {name = kit, renderImage = ''}
     end
 
     local function getPlayerFromDraft(render, name)
@@ -13090,7 +12493,7 @@ run(function()
 	local Reference, Strings, Sizes = {}, {}, {}
 
 	local function Added(ent)
-		local Name = bedwars.ItemMeta[ent.Name] and bedwars.ItemMeta[ent.Name].displayName or ent.Name
+		local Name = itemMeta(ent.Name).displayName or ent.Name
 		if WhitelistOnly.Enabled and not table.find(Whitelist.ListEnabled, Name:lower()) then
 			return
 		end
@@ -14557,7 +13960,7 @@ end)
 run(function()
     local old
 
-    vape.Categories.Kit:CreateModule({
+    resolveCategory("Kits", "Kit", "Utility"):CreateModule({
     	Name = 'Infinite Krystal',
     	Tooltip = 'Gives you max momentum forever',
     	Function = function(call)
@@ -14584,7 +13987,7 @@ NoFall = vape.Categories.Blatant:CreateModule({
 	Function = function(callback)
 		if callback then
 			NoFall:Clean(runService.Heartbeat:Connect(function(dt)
-				if entitylib.isAlive and bedwars.Knit.Controllers.MatchController:getMatchState() == 1 then
+				if entitylib.isAlive and bedwars.Knit and bedwars.Knit.Controllers and bedwars.Knit.Controllers.MatchController and bedwars.Knit.Controllers.MatchController:getMatchState() == 1 then
 					local root = entitylib.character.RootPart
 					local v = root.Velocity
 
@@ -14593,7 +13996,7 @@ NoFall = vape.Categories.Blatant:CreateModule({
 						entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
 					end
 
-					if root.Velocity.Y < -35 and not vape.Modules.Fly.Enabled then
+					if root.Velocity.Y < -35 and not (vape.Modules.Fly and vape.Modules.Fly.Enabled) then
 						root.Velocity = Vector3.new(0, 2.5, 0)
 						entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
 						runService.PreRender:Wait()
@@ -14604,7 +14007,7 @@ NoFall = vape.Categories.Blatant:CreateModule({
 
 			NoFall:Clean(entitylib.Events.LocalAdded:Connect(function(char)
 				local animator = char.Humanoid:WaitForChild('Animator', 1)
-				if animator and NoFall.Enabled and not vape.Modules.Fly.Enabled then
+				if animator and NoFall.Enabled and not (vape.Modules.Fly and vape.Modules.Fly.Enabled) then
 					task.wait(.5)
 					NoFall:Toggle()
 					NoFall:Toggle()
@@ -14788,7 +14191,7 @@ run(function()
 	local boostEndTime = 0
 	local old
 
-	KnockBackBoost = vape.Categories.Rage:CreateModule({
+	KnockBackBoost = resolveCategory("Rage", "Blatant", "Combat"):CreateModule({
 		Name = 'KnockBackBoost',
 		Function = function(callback)
 			frictionTable.KnockBackBoost = callback or nil
@@ -14888,7 +14291,7 @@ run(function()
         end
     end
 
-    LagBackDetector = vape.Categories.AntiCheat:CreateModule({
+    LagBackDetector = resolveCategory("AntiCheat", "Utility", "Blatant"):CreateModule({
         Name = 'LagBackDetector',
         Function = function(callback)
             if callback then
@@ -14965,7 +14368,7 @@ run(function()
     local oldWalkSpeed = 16
     local oldJumpPower = 50
 
-    TPDown = vape.Categories.AntiCheat:CreateModule({
+    TPDown = resolveCategory("AntiCheat", "Utility", "Blatant"):CreateModule({
         Name = 'TPDown',
         Function = function(callback)
             if callback then
@@ -15228,7 +14631,7 @@ run(function()
     -------------------------------------------------------
     -- モジュール本体
     -------------------------------------------------------
-    AntiHit = vape.Categories.oldModule:CreateModule({
+    AntiHit = resolveCategory("oldModule", "Blatant", "Combat"):CreateModule({
         Name = 'oldAntiHit',
         Function = function(callback)
             if callback then
@@ -15410,7 +14813,7 @@ run(function()
     local lastDropTime = 0
     local currentTween = nil
 
-    GodKill = vape.Categories.oldModule:CreateModule({
+    GodKill = resolveCategory("oldModule", "Blatant", "Combat"):CreateModule({
         Name = 'oldGodKill',
         Function = function(callback)
             if callback then
@@ -15618,10 +15021,15 @@ run(function()
         end
     end
 
-    InfiniteFly = vape.Categories.oldModule:CreateModule({
+    InfiniteFly = resolveCategory("oldModule", "Blatant", "Combat"):CreateModule({
         Name = 'InfiniteFly',
         Function = function(callback)
-            gameCamera.CameraSubject = callback and HiddenPart or entitylib.character.Character
+            if callback and not entitylib.isAlive then
+                notif('InfiniteFly', 'Cannot fly at this state.', 5, 'warning')
+                InfiniteFly:Toggle()
+                return
+            end
+            gameCamera.CameraSubject = callback and HiddenPart or (entitylib.character and entitylib.character.Character)
 
             if callback then
                 doCharacterThing()
@@ -15814,7 +15222,7 @@ run(function()
 end)
 
 run(function()
-	local TeamNotify = vape.Categories.Debug:CreateModule({
+	local TeamNotify = resolveCategory("Debug", "Utility", "Render"):CreateModule({
 		Name = 'TeamID Notify',
 		Function = function(callback)
 			if callback then
@@ -15835,7 +15243,7 @@ run(function()
 end)
 
 run(function()
-	local TeamGenNotify = vape.Categories.Debug:CreateModule({
+	local TeamGenNotify = resolveCategory("Debug", "Utility", "Render"):CreateModule({
 		Name = 'Team Gen Pos',
 		Function = function(callback)
 			if callback then
@@ -15874,7 +15282,7 @@ run(function()
 		return tostring(s) .. ' (' .. (stateNames[s] or 'Unknown') .. ')'
 	end
 
-	local NotifyMatchState = vape.Categories.Debug:CreateModule({
+	local NotifyMatchState = resolveCategory("Debug", "Utility", "Render"):CreateModule({
 		Name = 'NotifyMatchState',
 		Function = function(callback)
 			if callback then
@@ -15894,7 +15302,7 @@ run(function()
 end)
 
 run(function()
-    local NotifyItem = vape.Categories.Debug:CreateModule({
+    local NotifyItem = resolveCategory("Debug", "Utility", "Render"):CreateModule({
         Name = 'NotifyItem',
         Function = function(callback)
             if callback then
@@ -17128,7 +16536,7 @@ run(function()
 					local shouldSpeed = not isSeen()
 					setSpeeding(shouldSpeed)
 
-					if shouldSpeed and entitylib.isAlive and not Fly.Enabled and not InfiniteFly.Enabled and not LongJump.Enabled and isnetworkowner(entitylib.character.RootPart) then
+					if shouldSpeed and entitylib.isAlive and not Fly.Enabled and not (vape.Modules.InfiniteFly and vape.Modules.InfiniteFly.Enabled) and not LongJump.Enabled and isnetworkowner(entitylib.character.RootPart) then
 						local state = entitylib.character.Humanoid:GetState()
 						if state == Enum.HumanoidStateType.Climbing then return end
 
@@ -17188,7 +16596,7 @@ run(function()
 	local Threshold
 	local Fly
 	
-	AutoWhisper = vape.Categories.Kit:CreateModule({
+	AutoWhisper = resolveCategory("Kits", "Kit", "Utility"):CreateModule({
 		Name = 'AutoWhisper',
 		Function = function(callback)
 			if callback then
@@ -17627,7 +17035,7 @@ run(function()
     local SpeedValue
     local InvisDino
 
-    DinoSpeed = vape.Categories.AntiCheat:CreateModule({
+    DinoSpeed = resolveCategory("AntiCheat", "Utility", "Blatant"):CreateModule({
         Name = 'DinoSpeed',
         Function = function(callback)
             if callback then
@@ -17706,7 +17114,7 @@ run(function()
         return tonumber(text)
     end
 
-    ZephyrSpeed = vape.Categories.Kit:CreateModule({
+    ZephyrSpeed = resolveCategory("Kits", "Kit", "Utility"):CreateModule({
         Name = 'ZephyrSpeed',
         Function = function(callback)
             if callback then
