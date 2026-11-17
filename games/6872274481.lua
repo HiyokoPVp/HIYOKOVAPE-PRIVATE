@@ -5538,105 +5538,1370 @@ run(function()
 end)
 	
 run(function()
-local TargetPart
-local Targets
-local FOV
-local OtherProjectiles
-local rayCheck = RaycastParams.new()
-rayCheck.FilterType = Enum.RaycastFilterType.Include
-rayCheck.FilterDescendantsInstances = {workspace:FindFirstChild('Map')}
-local old
+    -- =========================================================
+    -- HIYOKOVAPE - ProjectileAimbot
+    -- CATVAPE-compatible port
+    -- =========================================================
 
-local ProjectileAimbot = vape.Categories.Blatant:CreateModule({
-	Name = 'ProjectileAimbot',
-	Function = function(callback)
-		if callback then
-			old = bedwars.ProjectileController.calculateImportantLaunchValues
-			bedwars.ProjectileController.calculateImportantLaunchValues = function(...)
-				local self, projmeta, worldmeta, origin, shootpos = ...
-				local plr = entitylib.EntityMouse({
-					Part = 'RootPart',
-					Range = FOV.Value,
-					Players = Targets.Players.Enabled,
-					NPCs = Targets.NPCs.Enabled,
-					Wallcheck = Targets.Walls.Enabled,
-					Origin = entitylib.isAlive and (shootpos or entitylib.character.RootPart.Position) or Vector3.zero
-				})
+    local module
+    local targets
+    local targetPartOption
+    local sortOption
+    local fovOption
+    local distanceOption
+    local horizontalOption
+    local verticalOption
+    local autoChargeOption
+    local aimChangeOption
+    local otherProjectilesOption
+    local useUmekoOption
+    local potionsOption
+    local blacklistOption
+    local miloCheckOption
 
-				if plr then
-					local pos = shootpos or self:getLaunchPosition(origin)
-					if not pos then
-						return old(...)
-					end
+    local rangeCircleToggle
+    local circleColorOption
+    local circleTransparencyOption
+    local circleThicknessOption
+    local circleFilledOption
 
-					if (not OtherProjectiles.Enabled) and not projmeta.projectile:find('arrow') then
-						return old(...)
-					end
+    local circleObject
+    local originalCalculateLaunchValues
+    local launchHook
+    local cheatEngineBinding
 
-					local meta = projmeta:getProjectileMeta()
-					local lifetime = (worldmeta and meta.predictionLifetimeSec or meta.lifetimeSec or 3)
-					local gravity = (meta.gravitationalAcceleration or 196.2) * projmeta.gravityMultiplier
-					local projSpeed = (meta.launchVelocity or 100)
-					local offsetpos = pos + (projmeta.projectile == 'owl_projectile' and Vector3.zero or projmeta.fromPositionOffset)
-					local balloons = plr.Character:GetAttribute('InflatedBalloons')
-					local playerGravity = workspace.Gravity
+    local arcParams = RaycastParams.new()
+    arcParams.FilterType = Enum.RaycastFilterType.Exclude
 
-					if balloons and balloons > 0 then
-						playerGravity = (workspace.Gravity * (1 - ((balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))))
-					end
+    local randomGenerator = Random.new()
+    local motionSamples = setmetatable({}, {__mode = "k"})
+    local randomLimb = setmetatable({}, {__mode = "k"})
 
-					if plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
-						playerGravity = 6
-					end
+    local limbParts = {
+        Torso = {
+            "UpperTorso",
+            "LowerTorso",
+            "Torso"
+        },
 
-					if plr.Player:GetAttribute('IsOwlTarget') then
-						for _, owl in collectionService:GetTagged('Owl') do
-							if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
-								playerGravity = 0
-							end
-						end
-					end
+        ["Left arm"] = {
+            "LeftUpperArm",
+            "LeftLowerArm",
+            "LeftHand",
+            "Left Arm"
+        },
 
-					local newlook = CFrame.new(offsetpos, plr[TargetPart.Value].Position) * CFrame.new(projmeta.projectile == 'owl_projectile' and Vector3.zero or Vector3.new(bedwars.BowConstantsTable.RelX, bedwars.BowConstantsTable.RelY, bedwars.BowConstantsTable.RelZ))
-					local calc = prediction.SolveTrajectory(newlook.p, projSpeed, gravity, plr[TargetPart.Value].Position, projmeta.projectile == 'telepearl' and Vector3.zero or plr[TargetPart.Value].Velocity, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck)
-					if calc then
-						targetinfo.Targets[plr] = os.clock() + 1
-						return {
-							initialVelocity = CFrame.new(newlook.Position, calc).LookVector * projSpeed,
-							positionFrom = offsetpos,
-							deltaT = lifetime,
-							gravitationalAcceleration = gravity,
-							drawDurationSeconds = 5
-						}
-					end
-				end
+        ["Right arm"] = {
+            "RightUpperArm",
+            "RightLowerArm",
+            "RightHand",
+            "Right Arm"
+        },
 
-				return old(...)
-			end
-		else
-			bedwars.ProjectileController.calculateImportantLaunchValues = old
-		end
-	end,
-	Tooltip = 'Silently adjusts your aim towards the enemy'
-})
-Targets = ProjectileAimbot:CreateTargets({
-	Players = true,
-	Walls = true
-})
-TargetPart = ProjectileAimbot:CreateDropdown({
-	Name = 'Part',
-	List = {'RootPart', 'Head'}
-})
-FOV = ProjectileAimbot:CreateSlider({
-	Name = 'FOV',
-	Min = 1,
-	Max = 1000,
-	Default = 1000
-})
-OtherProjectiles = ProjectileAimbot:CreateToggle({
-	Name = 'Other Projectiles',
-	Default = true
-})
+        ["Left leg"] = {
+            "LeftUpperLeg",
+            "LeftLowerLeg",
+            "LeftFoot",
+            "Left Leg"
+        },
+
+        ["Right leg"] = {
+            "RightUpperLeg",
+            "RightLowerLeg",
+            "RightFoot",
+            "Right Leg"
+        }
+    }
+
+    local limbOrder = {
+        "Head",
+        "Torso",
+        "Left arm",
+        "Right arm",
+        "Left leg",
+        "Right leg"
+    }
+
+    -- =========================================================
+    -- Common helpers
+    -- =========================================================
+
+    local function getMouseOrigin()
+        if inputService.TouchEnabled then
+            return gameCamera.ViewportSize / 2
+        end
+
+        return inputService:GetMouseLocation()
+    end
+
+    local function safeCall(callback, ...)
+        local success, result = pcall(callback, ...)
+
+        if success then
+            return result
+        end
+
+        return nil
+    end
+
+    local function isHeadshotProjectile(itemType)
+        if not itemType then
+            return false
+        end
+
+        return itemType:find("headhunter", 1, true) ~= nil
+            or itemType:find("tactical", 1, true) ~= nil
+            or store.equippedKit == "archer"
+    end
+
+    local function isDisguised(entity)
+        if not entity or not entity.Player then
+            return false
+        end
+
+        local controller = bedwars.BlockDisguiseController
+
+        if not controller then
+            return false
+        end
+
+        local method = controller.getPlayerBlockModel
+
+        if type(method) ~= "function" then
+            return false
+        end
+
+        local success, model = pcall(
+            method,
+            controller,
+            entity.Player
+        )
+
+        return success and model ~= nil
+    end
+
+    local function getTargetPart(entity, mode)
+        if not entity or not entity.Character then
+            return entity and entity.RootPart or nil
+        end
+
+        if mode == "Random" then
+            local selected = randomLimb[entity.Character]
+
+            if not selected or tick() > selected.Expires then
+                selected = {
+                    Name = limbOrder[
+                        randomGenerator:NextInteger(1, #limbOrder)
+                    ],
+                    Expires = tick() + 1
+                }
+
+                randomLimb[entity.Character] = selected
+            end
+
+            mode = selected.Name
+        end
+
+        if mode == "Dynamic" then
+            local tool = store.hand and store.hand.tool
+            local itemName = tool and tool.Name
+
+            mode = isHeadshotProjectile(itemName)
+                and "Head"
+                or "RootPart"
+        end
+
+        if mode == "Head" then
+            return entity.Character:FindFirstChild("Head")
+                or entity.Head
+                or entity.RootPart
+        end
+
+        local names = limbParts[mode]
+
+        if names then
+            for _, name in names do
+                local part = entity.Character:FindFirstChild(name)
+
+                if part and part:IsA("BasePart") then
+                    return part
+                end
+            end
+        end
+
+        return entity.RootPart
+    end
+
+    local function getHitChance(entity, flightTime)
+        if not entity or not entity.RootPart then
+            return 0
+        end
+
+        if not flightTime
+            or flightTime ~= flightTime
+            or flightTime <= 0
+        then
+            return 0
+        end
+
+        local root = entity.RootPart
+        local velocity =
+            root.AssemblyLinearVelocity * Vector3.new(1, 0, 1)
+
+        local sample = motionSamples[root]
+
+        if not sample then
+            sample = {
+                Velocity = velocity,
+                Clock = os.clock(),
+                Acceleration = 0,
+                Speed = velocity.Magnitude
+            }
+
+            motionSamples[root] = sample
+        end
+
+        local elapsed = os.clock() - sample.Clock
+
+        if elapsed >= 0.05 then
+            local blend = math.min(elapsed * 5, 1)
+            local acceleration =
+                (velocity - sample.Velocity).Magnitude / elapsed
+
+            sample.Acceleration +=
+                (acceleration - sample.Acceleration) * blend
+
+            sample.Speed +=
+                (velocity.Magnitude - sample.Speed) * blend
+
+            sample.Velocity = velocity
+            sample.Clock = os.clock()
+        end
+
+        local drift =
+            math.max(sample.Speed, velocity.Magnitude)
+            * math.min(flightTime, 0.4)
+            * math.clamp(sample.Acceleration / 120, 0, 1)
+
+        return 1 / (1 + ((drift / 3) ^ 2))
+    end
+
+    local function getProjectileMeta(launchData)
+        if not launchData then
+            return nil
+        end
+
+        if type(launchData.getProjectileMeta) == "function" then
+            local meta = safeCall(
+                launchData.getProjectileMeta,
+                launchData
+            )
+
+            if meta then
+                return meta
+            end
+        end
+
+        local projectileName = launchData.projectile
+
+        return projectileName
+            and bedwars.ProjectileMeta
+            and bedwars.ProjectileMeta[projectileName]
+            or nil
+    end
+
+    local function getNumber(value, fallback)
+        if type(value) == "number" and value == value then
+            return value
+        end
+
+        return fallback
+    end
+
+    local function getVector(value, fallback)
+        if typeof(value) == "Vector3" then
+            return value
+        end
+
+        return fallback
+    end
+
+    local function getLaunchPosition(
+        controller,
+        launchData,
+        origin,
+        shootPosition
+    )
+        if typeof(shootPosition) == "Vector3" then
+            return shootPosition
+        end
+
+        if controller
+            and type(controller.getLaunchPosition) == "function"
+        then
+            local tool = store.hand and store.hand.tool
+
+            local position = safeCall(
+                controller.getLaunchPosition,
+                controller,
+                tool or origin
+            )
+
+            if typeof(position) == "Vector3" then
+                return position
+            end
+        end
+
+        if typeof(origin) == "Vector3" then
+            return origin
+        end
+
+        if entitylib.isAlive
+            and entitylib.character
+            and entitylib.character.RootPart
+        then
+            return entitylib.character.RootPart.Position
+        end
+
+        return nil
+    end
+
+    -- =========================================================
+    -- Target gravity
+    -- =========================================================
+
+    local function getTargetGravity(entity)
+        local gravity = workspace.Gravity
+        local character = entity.Character
+
+        if not character then
+            return gravity
+        end
+
+        local balloons = character:GetAttribute("InflatedBalloons")
+
+        if type(balloons) == "number" and balloons > 0 then
+            local multiplier
+
+            if balloons >= 4 then
+                multiplier = 1.2
+            elseif balloons >= 3 then
+                multiplier = 1
+            else
+                multiplier = 0.975
+            end
+
+            gravity *= 1 - multiplier
+        end
+
+        local primaryPart = character.PrimaryPart
+
+        if primaryPart
+            and primaryPart:FindFirstChild(
+                "rbxassetid://8200754399"
+            )
+        then
+            gravity = 6
+        end
+
+        if entity.Player
+            and entity.Player:GetAttribute("IsOwlTarget")
+        then
+            for _, owl in collectionService:GetTagged("Owl") do
+                if owl:GetAttribute("Target")
+                    == entity.Player.UserId
+                    and owl:GetAttribute("Status") == 2
+                then
+                    gravity = 0
+                    break
+                end
+            end
+        end
+
+        return gravity
+    end
+
+    -- =========================================================
+    -- Trajectory
+    -- =========================================================
+
+    local function solveTrajectory(
+        origin,
+        speed,
+        projectileGravity,
+        targetPosition,
+        targetVelocity,
+        playerGravity,
+        hipHeight,
+        jumpSpeed,
+        airborne,
+        rootPart
+    )
+        if not prediction
+            or type(prediction.SolveTrajectory) ~= "function"
+        then
+            return nil, nil, nil
+        end
+
+        local rayParams = store.airRay
+
+        local success, aimPosition, secondResult, flightTime =
+            pcall(
+                prediction.SolveTrajectory,
+                origin,
+                speed,
+                projectileGravity,
+                targetPosition,
+                targetVelocity,
+                playerGravity,
+                hipHeight,
+                jumpSpeed,
+                rayParams,
+                airborne,
+                targetPosition,
+                rootPart,
+                nil,
+                true
+            )
+
+        if success
+            and typeof(aimPosition) == "Vector3"
+        then
+            return aimPosition, secondResult, flightTime
+        end
+
+        success, aimPosition, secondResult, flightTime =
+            pcall(
+                prediction.SolveTrajectory,
+                origin,
+                speed,
+                projectileGravity,
+                targetPosition,
+                targetVelocity,
+                playerGravity,
+                hipHeight,
+                jumpSpeed
+            )
+
+        if success
+            and typeof(aimPosition) == "Vector3"
+        then
+            return aimPosition, secondResult, flightTime
+        end
+
+        return nil, nil, nil
+    end
+
+    local function trajectoryIsClear(
+        origin,
+        velocity,
+        gravity,
+        flightTime,
+        targetCharacter
+    )
+        if not targets.Walls.Enabled then
+            return true
+        end
+
+        if not prediction
+            or type(prediction.IsTrajectoryClear) ~= "function"
+        then
+            return true
+        end
+
+        local ignoreList = {
+            gameCamera,
+            lplr.Character
+        }
+
+        for _, entity in entitylib.List do
+            if entity.Character then
+                table.insert(ignoreList, entity.Character)
+            end
+        end
+
+        arcParams.FilterDescendantsInstances = ignoreList
+
+        local success, clear = pcall(
+            prediction.IsTrajectoryClear,
+            origin,
+            velocity,
+            gravity,
+            flightTime,
+            arcParams,
+            targetCharacter
+        )
+
+        if success then
+            return clear ~= false
+        end
+
+        success, clear = pcall(
+            prediction.IsTrajectoryClear,
+            origin,
+            velocity,
+            gravity,
+            flightTime,
+            arcParams
+        )
+
+        return not success or clear ~= false
+    end
+
+    -- =========================================================
+    -- Launch calculation
+    -- =========================================================
+
+    local function calculateAimValues(
+        controller,
+        launchData,
+        worldMeta,
+        origin,
+        shootPosition
+    )
+        if not entitylib.isAlive
+            or not entitylib.character
+            or not entitylib.character.RootPart
+        then
+            return nil
+        end
+
+        if not launchData
+            or type(launchData.projectile) ~= "string"
+        then
+            return nil
+        end
+
+        local projectileName = launchData.projectile
+        local projectileMeta = getProjectileMeta(launchData)
+
+        if not projectileMeta then
+            return nil
+        end
+
+        local isPotion =
+            projectileName:find("splash_potion", 1, true) ~= nil
+
+        local isArrow =
+            projectileName:find("arrow", 1, true) ~= nil
+
+        local isChakram =
+            projectileName:find("^ninja_chakram") ~= nil
+
+        if isPotion then
+            if not potionsOption.Enabled then
+                return nil
+            end
+        elseif not otherProjectilesOption.Enabled
+            and not isArrow
+            and not (
+                useUmekoOption.Enabled
+                and isChakram
+            )
+        then
+            return nil
+        end
+
+        local blacklistName = projectileName
+
+        if projectileName == "glue_trap"
+            or projectileName == "glue_projectile"
+        then
+            blacklistName = "gloop"
+        end
+
+        if table.find(
+            blacklistOption.ListEnabled or {},
+            blacklistName
+        ) then
+            return nil
+        end
+
+        local launchPosition = getLaunchPosition(
+            controller,
+            launchData,
+            origin,
+            shootPosition
+        )
+
+        if not launchPosition then
+            return nil
+        end
+
+        local lifetime = getNumber(
+            worldMeta
+                and projectileMeta.predictionLifetimeSec
+                or projectileMeta.lifetimeSec,
+            3
+        )
+
+        local gravityMultiplier = getNumber(
+            launchData.gravityMultiplier,
+            1
+        )
+
+        local projectileGravity =
+            getNumber(
+                projectileMeta.gravitationalAcceleration,
+                196.2
+            ) * gravityMultiplier
+
+        local velocityMultiplier = getNumber(
+            launchData.velocityMultiplier,
+            1
+        )
+
+        local fullCharge =
+            autoChargeOption.Enabled
+            or not aimChangeOption.Enabled
+
+        local speedMultiplier = fullCharge
+            and 1
+            or velocityMultiplier
+
+        local projectileSpeed =
+            getNumber(projectileMeta.launchVelocity, 100)
+            * speedMultiplier
+
+        if projectileSpeed <= 0 then
+            return nil
+        end
+
+        local positionOffset =
+            projectileName == "owl_projectile"
+                and Vector3.zero
+                or getVector(
+                    launchData.fromPositionOffset,
+                    Vector3.zero
+                )
+
+        local offsetPosition = launchPosition + positionOffset
+
+        local tool = store.hand and store.hand.tool
+        local itemName = tool and tool.Name
+
+        local requestedPart = targetPartOption.Value
+
+        if requestedPart == "Dynamic" then
+            requestedPart = isHeadshotProjectile(itemName)
+                and "Head"
+                or "RootPart"
+        end
+
+        local values
+        local attempts = 0
+        local started = os.clock()
+
+        local localPosition =
+            entitylib.character.RootPart.Position
+
+        local sortMethod =
+            sortmethods[sortOption.Value]
+            or sortmethods.Distance
+
+        local candidate = entitylib.EntityMouse({
+            Part = "RootPart",
+            Range = fovOption.Value,
+            Players = targets.Players.Enabled,
+            NPCs = targets.NPCs.Enabled,
+            Priority = targets.Priority
+                and targets.Priority.Value
+                or nil,
+            Origin = typeof(shootPosition) == "Vector3"
+                and shootPosition
+                or localPosition,
+            MouseOrigin = getMouseOrigin(),
+            Sort = sortMethod,
+
+            Check = function(candidateEntity)
+                if not candidateEntity
+                    or not candidateEntity.Character
+                    or not candidateEntity.RootPart
+                then
+                    return false
+                end
+
+                if miloCheckOption.Enabled
+                    and isDisguised(candidateEntity)
+                then
+                    return false
+                end
+
+                if (
+                    candidateEntity.RootPart.Position
+                    - localPosition
+                ).Magnitude > distanceOption.Value then
+                    return false
+                end
+
+                if attempts >= 10 then
+                    return false
+                end
+
+                if attempts > 0
+                    and os.clock() - started > 0.0015
+                then
+                    return false
+                end
+
+                attempts += 1
+
+                local aimPart = getTargetPart(
+                    candidateEntity,
+                    requestedPart
+                )
+
+                if not aimPart then
+                    return false
+                end
+
+                local targetVelocity =
+                    projectileName == "telepearl"
+                        and Vector3.zero
+                        or aimPart.AssemblyLinearVelocity
+
+                local playerGravity =
+                    getTargetGravity(candidateEntity)
+
+                local airborne =
+                    (
+                        candidateEntity.Humanoid
+                        and candidateEntity.Humanoid.FloorMaterial
+                            == Enum.Material.Air
+                    )
+                    or math.abs(
+                        candidateEntity.RootPart
+                            .AssemblyLinearVelocity.Y
+                    ) > 0.01
+
+                local aimPosition, _, flightTime =
+                    solveTrajectory(
+                        offsetPosition,
+                        projectileSpeed,
+                        projectileGravity,
+                        aimPart.Position,
+                        targetVelocity,
+                        playerGravity,
+                        candidateEntity.HipHeight,
+                        candidateEntity.Jumping and 42.6 or nil,
+                        airborne,
+                        candidateEntity.RootPart
+                    )
+
+                if aimPosition
+                    and flightTime
+                    and (
+                        horizontalOption.Value ~= 1
+                        or verticalOption.Value ~= 1
+                    )
+                then
+                    local rise =
+                        targetVelocity.Y * flightTime
+                        - (
+                            playerGravity
+                            * flightTime
+                            * flightTime
+                            * 0.5
+                        )
+
+                    local lead = Vector3.new(
+                        targetVelocity.X
+                            * flightTime
+                            * (horizontalOption.Value - 1),
+
+                        rise * (verticalOption.Value - 1),
+
+                        targetVelocity.Z
+                            * flightTime
+                            * (horizontalOption.Value - 1)
+                    )
+
+                    local adjustedPosition, _, adjustedTime =
+                        solveTrajectory(
+                            offsetPosition,
+                            projectileSpeed,
+                            projectileGravity,
+                            aimPart.Position + lead,
+                            targetVelocity,
+                            playerGravity,
+                            candidateEntity.HipHeight,
+                            candidateEntity.Jumping and 42.6 or nil,
+                            airborne,
+                            candidateEntity.RootPart
+                        )
+
+                    if adjustedPosition then
+                        aimPosition = adjustedPosition
+                        flightTime = adjustedTime or flightTime
+                    end
+                end
+
+                if not aimPosition
+                    or not flightTime
+                    or flightTime > lifetime
+                then
+                    return false
+                end
+
+                local delta = aimPosition - offsetPosition
+
+                if delta.Magnitude <= 0.001 then
+                    return false
+                end
+
+                local launchVelocity =
+                    delta.Unit * projectileSpeed
+
+                if not trajectoryIsClear(
+                    offsetPosition,
+                    launchVelocity,
+                    projectileGravity,
+                    flightTime,
+                    candidateEntity.Character
+                ) then
+                    return false
+                end
+
+                store.hitchance.ProjectileAimbot = {
+                    Value = getHitChance(
+                        candidateEntity,
+                        flightTime
+                    ),
+                    Clock = tick()
+                }
+
+                values = {
+                    initialVelocity = launchVelocity,
+                    positionFrom = offsetPosition,
+                    deltaT = lifetime,
+                    gravitationalAcceleration =
+                        projectileGravity,
+                    drawDurationSeconds =
+                        autoChargeOption.Enabled
+                            and 5
+                            or getNumber(
+                                launchData.drawDurationSeconds,
+                                1
+                            )
+                }
+
+                values.targetEntity = candidateEntity
+                values.flightTime = flightTime
+
+                return true
+            end
+        })
+
+        if candidate and values then
+            targetinfo.Targets[candidate] = tick() + 1
+            return values
+        end
+
+        return nil
+    end
+
+    -- =========================================================
+    -- FOV circle
+    -- =========================================================
+
+    local function updateCircle()
+        if circleObject then
+            circleObject.Position = getMouseOrigin()
+            circleObject.Visible = module.Enabled
+        end
+    end
+
+    local function removeCircle()
+        if not circleObject then
+            return
+        end
+
+        pcall(function()
+            circleObject.Visible = false
+            circleObject:Remove()
+        end)
+
+        circleObject = nil
+    end
+
+    -- =========================================================
+    -- Hook management
+    -- =========================================================
+
+    local function restoreHook()
+        if launchHook
+            and bedwars.ProjectileController
+            and bedwars.ProjectileController
+                .calculateImportantLaunchValues == launchHook
+        then
+            bedwars.ProjectileController
+                .calculateImportantLaunchValues =
+                    originalCalculateLaunchValues
+        end
+
+        originalCalculateLaunchValues = nil
+        launchHook = nil
+        cheatEngineBinding = nil
+    end
+
+    -- =========================================================
+    -- Module
+    -- =========================================================
+
+    module = vape.Categories.Blatant:CreateModule({
+        Name = "ProjectileAimbot",
+
+        Function = function(enabled)
+            if circleObject then
+                circleObject.Visible = enabled
+            end
+
+            if enabled then
+                module:Clean(
+                    runService.RenderStepped:Connect(
+                        updateCircle
+                    )
+                )
+
+                module:Clean(
+                    gameCamera:GetPropertyChangedSignal(
+                        "ViewportSize"
+                    ):Connect(updateCircle)
+                )
+
+                local controller =
+                    bedwars.ProjectileController
+
+                if not controller then
+                    notif(
+                        "ProjectileAimbot",
+                        "ProjectileController が見つかりません。",
+                        8,
+                        "alert"
+                    )
+
+                    module:Toggle()
+                    return
+                end
+
+                -- Native debug hooks are unavailable.
+                if not canDebug then
+                    local cheatEngine =
+                        vape.Libraries
+                        and vape.Libraries.cheatengine
+
+                    local projectileAim =
+                        cheatEngine
+                        and cheatEngine.ProjectileAim
+
+                    if not projectileAim
+                        or type(projectileAim.Bind) ~= "function"
+                    then
+                        notif(
+                            "ProjectileAimbot",
+                            "この実行環境には ProjectileAim フックがありません。",
+                            10,
+                            "alert"
+                        )
+
+                        module:Toggle()
+                        return
+                    end
+
+                    cheatEngineBinding =
+                        projectileAim.Bind({
+                            Preview = true,
+
+                            Solve = function(
+                                launchData,
+                                origin,
+                                speed
+                            )
+                                local values =
+                                    calculateAimValues(
+                                        controller,
+                                        launchData,
+                                        true,
+                                        origin,
+                                        nil
+                                    )
+
+                                if values
+                                    and typeof(
+                                        values.initialVelocity
+                                    ) == "Vector3"
+                                then
+                                    return values
+                                        .initialVelocity
+                                        .Unit
+                                end
+
+                                return nil
+                            end
+                        })
+
+                    module:Clean(function()
+                        if type(cheatEngineBinding) == "function" then
+                            cheatEngineBinding()
+                        elseif type(cheatEngineBinding) == "table"
+                            and type(
+                                cheatEngineBinding.Destroy
+                            ) == "function"
+                        then
+                            cheatEngineBinding:Destroy()
+                        end
+
+                        cheatEngineBinding = nil
+                    end)
+
+                    return
+                end
+
+                if launchHook then
+                    return
+                end
+
+                local original =
+                    controller.calculateImportantLaunchValues
+
+                if type(original) ~= "function" then
+                    notif(
+                        "ProjectileAimbot",
+                        "発射計算関数が見つかりません。",
+                        8,
+                        "alert"
+                    )
+
+                    module:Toggle()
+                    return
+                end
+
+                originalCalculateLaunchValues = original
+
+                launchHook = function(
+                    self,
+                    launchData,
+                    worldMeta,
+                    origin,
+                    shootPosition,
+                    ...
+                )
+                    if module.Enabled then
+                        local success, values = pcall(
+                            calculateAimValues,
+                            self,
+                            launchData,
+                            worldMeta,
+                            origin,
+                            shootPosition
+                        )
+
+                        if success and values then
+                            return values
+                        end
+                    end
+
+                    return original(
+                        self,
+                        launchData,
+                        worldMeta,
+                        origin,
+                        shootPosition,
+                        ...
+                    )
+                end
+
+                controller.calculateImportantLaunchValues =
+                    launchHook
+
+                module:Clean(restoreHook)
+            else
+                restoreHook()
+            end
+        end,
+
+        Tooltip =
+            "Silently adjusts projectile trajectories toward enemies."
+    })
+
+    -- =========================================================
+    -- Target settings
+    -- =========================================================
+
+    targets = module:CreateTargets({
+        Players = true,
+        Walls = true
+    })
+
+    local methods = {
+        "Distance",
+        "Damage"
+    }
+
+    for name in sortmethods do
+        if not table.find(methods, name) then
+            table.insert(methods, name)
+        end
+    end
+
+    sortOption = module:CreateDropdown({
+        Name = "Target mode",
+        List = methods,
+        Default = "Distance"
+    })
+
+    targetPartOption = module:CreateDropdown({
+        Name = "Part",
+
+        List = {
+            "RootPart",
+            "Head",
+            "Torso",
+            "Left arm",
+            "Right arm",
+            "Left leg",
+            "Right leg",
+            "Random",
+            "Dynamic"
+        },
+
+        Default = "RootPart",
+
+        Tooltip =
+            "Dynamic はヘッドショット対応武器で頭、それ以外で胴体を狙います。"
+    })
+
+    fovOption = module:CreateSlider({
+        Name = "FOV",
+        Min = 1,
+        Max = 1000,
+        Default = 1000,
+
+        Function = function(value)
+            if circleObject then
+                circleObject.Radius = value
+            end
+        end
+    })
+
+    distanceOption = module:CreateSlider({
+        Name = "Distance",
+        Min = 1,
+        Max = 1000,
+        Default = 1000,
+
+        Suffix = function(value)
+            return value == 1 and "stud" or "studs"
+        end,
+
+        Tooltip = "自分から目標までの最大距離"
+    })
+
+    -- =========================================================
+    -- Range circle
+    -- =========================================================
+
+    rangeCircleToggle = module:CreateToggle({
+        Name = "Range Circle",
+
+        Function = function(enabled)
+            if enabled then
+                if type(Drawing) ~= "table"
+                    or type(Drawing.new) ~= "function"
+                then
+                    notif(
+                        "ProjectileAimbot",
+                        "Drawing API が利用できません。",
+                        5,
+                        "warning"
+                    )
+
+                    rangeCircleToggle:Toggle()
+                    return
+                end
+
+                circleObject = Drawing.new("Circle")
+                circleObject.Filled =
+                    circleFilledOption.Enabled
+                circleObject.Color = Color3.fromHSV(
+                    circleColorOption.Hue,
+                    circleColorOption.Sat,
+                    circleColorOption.Value
+                )
+                circleObject.Position = getMouseOrigin()
+                circleObject.Radius = fovOption.Value
+                circleObject.NumSides = 100
+                circleObject.Thickness =
+                    circleThicknessOption.Value
+                circleObject.Transparency =
+                    1 - circleTransparencyOption.Value
+                circleObject.Visible = module.Enabled
+            else
+                removeCircle()
+            end
+
+            circleColorOption.Object.Visible = enabled
+            circleTransparencyOption.Object.Visible = enabled
+            circleThicknessOption.Object.Visible = enabled
+            circleFilledOption.Object.Visible = enabled
+        end
+    })
+
+    circleColorOption = module:CreateColorSlider({
+        Name = "Circle Color",
+        Darker = true,
+        Visible = false,
+
+        Function = function(hue, saturation, value)
+            if circleObject then
+                circleObject.Color =
+                    Color3.fromHSV(hue, saturation, value)
+            end
+        end
+    })
+
+    circleTransparencyOption = module:CreateSlider({
+        Name = "Transparency",
+        Min = 0,
+        Max = 1,
+        Decimal = 10,
+        Default = 0.5,
+        Darker = true,
+        Visible = false,
+
+        Function = function(value)
+            if circleObject then
+                circleObject.Transparency = 1 - value
+            end
+        end
+    })
+
+    circleThicknessOption = module:CreateSlider({
+        Name = "Thickness",
+        Min = 1,
+        Max = 10,
+        Decimal = 10,
+        Default = 1,
+        Darker = true,
+        Visible = false,
+
+        Function = function(value)
+            if circleObject then
+                circleObject.Thickness = value
+            end
+        end
+    })
+
+    circleFilledOption = module:CreateToggle({
+        Name = "Circle Filled",
+        Darker = true,
+        Visible = false,
+
+        Function = function(enabled)
+            if circleObject then
+                circleObject.Filled = enabled
+            end
+        end
+    })
+
+    -- =========================================================
+    -- Prediction settings
+    -- =========================================================
+
+    horizontalOption = module:CreateSlider({
+        Name = "Horizontal prediction",
+        Min = 0,
+        Max = 2,
+        Default = 1,
+        Decimal = 100,
+
+        Tooltip =
+            "目標の横移動をどれだけ先読みするか。1 が標準です。"
+    })
+
+    verticalOption = module:CreateSlider({
+        Name = "Vertical prediction",
+        Min = 0,
+        Max = 2,
+        Default = 1,
+        Decimal = 100,
+
+        Tooltip =
+            "目標の上昇・落下をどれだけ先読みするか。1 が標準です。"
+    })
+
+    autoChargeOption = module:CreateToggle({
+        Name = "Auto Charge",
+        Default = true,
+        Visible = canDebug,
+
+        Function = function(enabled)
+            if aimChangeOption
+                and aimChangeOption.Object
+            then
+                aimChangeOption.Object.Visible =
+                    enabled and canDebug
+            end
+        end,
+
+        Tooltip =
+            "弓などの投射物を最大チャージ扱いで計算します。"
+    })
+
+    aimChangeOption = module:CreateToggle({
+        Name = "Aim change",
+        Default = true,
+        Darker = true,
+        Visible = canDebug,
+
+        Tooltip =
+            "現在のチャージ率に合わせて弾道を計算します。"
+    })
+
+    otherProjectilesOption = module:CreateToggle({
+        Name = "Other Projectiles",
+        Default = true,
+
+        Tooltip =
+            "矢とポーション以外の投射物も補正します。"
+    })
+
+    useUmekoOption = module:CreateToggle({
+        Name = "Use umeko",
+
+        Tooltip =
+            "Other Projectiles が無効でもチャクラムを補正します。"
+    })
+
+    potionsOption = module:CreateToggle({
+        Name = "Shoot pots",
+        Default = true,
+
+        Tooltip =
+            "回復・毒・睡眠などのスプラッシュポーションを補正します。"
+    })
+
+    blacklistOption = module:CreateTextList({
+        Name = "Blacklist",
+        Default = {
+            "telepearl"
+        },
+
+        Placeholder = "projectile"
+    })
+
+    miloCheckOption = module:CreateToggle({
+        Name = "Milo check",
+        Default = true,
+
+        Tooltip =
+            "ブロックに変身中の Milo プレイヤーを除外します。"
+    })
+
+    module:Clean(function()
+        restoreHook()
+        removeCircle()
+    end)
 end)
 
 -- [patch] A3a ProjectileAimbot legacy tail : dangling legacy block removed (92 lines)
