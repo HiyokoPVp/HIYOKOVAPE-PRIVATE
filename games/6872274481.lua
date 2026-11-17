@@ -5536,7 +5536,9 @@ run(function()
 end)
 	
 run(function()
-    -- ProjectileAimbot : CATVAPE port
+    -- ============================================================
+    -- ProjectileAimbot : CATVAPE port (HIYOKOVAPE fixed build)
+    -- ============================================================
     local ProjectileAimbot
     local Targets, Sort, TargetPart
     local FOV, Distance, Horizontal, Vertical
@@ -5544,10 +5546,13 @@ run(function()
     local Blacklist, MiloCheck
     local RangeCircle, CircleColor, CircleTransparency, CircleThickness, CircleFilled
     local CircleObject, launchHook, oldKick
+
     local ArcCheck = RaycastParams.new()
     ArcCheck.FilterType = Enum.RaycastFilterType.Exclude
+
     local MapCheck = RaycastParams.new()
     MapCheck.FilterType = Enum.RaycastFilterType.Include
+
     local Limbs = {
         Torso = {'UpperTorso', 'LowerTorso', 'Torso'},
         ['Left arm'] = {'LeftUpperArm', 'LeftLowerArm', 'LeftHand', 'Left Arm'},
@@ -5559,26 +5564,31 @@ run(function()
     local RandomLimb = setmetatable({}, {__mode = 'k'})
     local Motion = setmetatable({}, {__mode = 'k'})
 
+    -- マウス座標の取得
     local function mouseOrigin()
-        if not inputService then return Vector2.new(0,0) end
+        if not inputService then return Vector2.new(0, 0) end
         if inputService.TouchEnabled then return gameCamera.ViewportSize / 2 end
         return inputService:GetMouseLocation()
     end
+
+    -- ヘッドショット判定
     local function isHeadshot(itemType)
         if not itemType then return false end
         return (itemType:find('headhunter', 1, true) or itemType:find('tactical', 1, true) or store.equippedKit == 'archer') and true or false
     end
+
+    -- ミロ変装チェック
     local function isDisguised(ent)
         if not ent or not ent.Player then return false end
-        -- 修正: bedwars と BlockDisguiseController の存在チェックを強化
         if not bedwars then return false end
         local controller = bedwars.BlockDisguiseController
         if not controller then return false end
         if type(controller.getPlayerBlockModel) ~= 'function' then return false end
-        
         local ok, res = pcall(controller.getPlayerBlockModel, controller, ent.Player)
         return ok and res ~= nil
     end
+
+    -- 狙う部位の決定
     local function targetPart(ent, mode)
         if mode == 'Random' and ent.Character then
             local pick = RandomLimb[ent.Character]
@@ -5600,6 +5610,8 @@ run(function()
         end
         return ent.RootPart
     end
+
+    -- 命中確率の計算
     local function hitChance(ent, flight)
         if not flight or flight ~= flight or flight <= 0 then return 0 end
         local root = ent.RootPart
@@ -5619,12 +5631,16 @@ run(function()
         local drift = math.max(sample.speed, vel.Magnitude) * math.min(flight, 0.4) * math.clamp(sample.accel / 120, 0, 1)
         return 1 / (1 + ((drift / 3) ^ 2))
     end
+
+    -- 軌道上に障害物がないか確認
     local function arcClear(from, vel, gravity, flight)
         if not prediction or type(prediction.IsTrajectoryClear) ~= 'function' then return true end
         local ok, res = pcall(prediction.IsTrajectoryClear, from, vel, gravity, flight, ArcCheck)
         if ok then return res and true or false end
         return true
     end
+
+    -- 弾道予測のラッパー
     local function solve(from, speed, gravity, pos, vel, pgravity, hip, jump, airborne, ent)
         if not prediction or type(prediction.SolveTrajectory) ~= 'function' then return nil, nil end
         local a, _, t = prediction.SolveTrajectory(from, speed, gravity, pos, vel, pgravity, hip, jump, MapCheck, airborne, ent.RootPart.Position, ent.RootPart, nil, true)
@@ -5634,6 +5650,7 @@ run(function()
         return a, t
     end
 
+    -- ★ ここが最重要：発射値を計算してエイムを調整する関数
     local function AimLaunchValues(self, LaunchData, WorldMeta, Origin, ShootPosition)
         local LaunchPosition = ShootPosition
         if typeof(LaunchPosition) ~= 'Vector3' then
@@ -5641,16 +5658,23 @@ run(function()
             LaunchPosition = ok and res or nil
         end
         if typeof(LaunchPosition) ~= 'Vector3' then return nil end
+
         local projectile = LaunchData.projectile
         if type(projectile) ~= 'string' then return nil end
+
+        -- ポーションとその他飛翔体のフィルタリング
         if projectile:find('splash_potion') then
             if not Potions.Enabled then return nil end
         elseif (not OtherProjectiles.Enabled) and not projectile:find('arrow') and not (UseUmeko.Enabled and projectile:find('^ninja_chakram')) then
             return nil
         end
+
+        -- ブラックリストチェック
         if table.find(Blacklist.ListEnabled or {}, ((projectile == 'glue_trap' or projectile == 'glue_projectile') and 'gloop' or projectile)) then return nil end
+
         local okMeta, Meta = pcall(function() return LaunchData:getProjectileMeta() end)
         if not okMeta or type(Meta) ~= 'table' then return nil end
+
         local Lifetime = (WorldMeta and Meta.predictionLifetimeSec or Meta.lifetimeSec or 3)
         local Gravity = (Meta.gravitationalAcceleration or 196.2) * (LaunchData.gravityMultiplier or 1)
         local Speed = (Meta.launchVelocity or 100) * ((AutoCharge.Enabled or not AimChange.Enabled) and 1 or (LaunchData.velocityMultiplier or 1))
@@ -5660,8 +5684,11 @@ run(function()
         local selfPos = entitylib.character.RootPart.Position
         local filtered = false
 
+        -- 各エンティティに対して最適な発射ベクトルを計算
         local function GetValues(ent)
             if not ent.Character or not ent.RootPart then return nil end
+
+            -- 風船による重力変化
             local balloons = ent.Character:GetAttribute('InflatedBalloons')
             local pgravity = workspace.Gravity
             if balloons and balloons > 0 then
@@ -5673,22 +5700,30 @@ run(function()
                     if owl:GetAttribute('Target') == ent.Player.UserId and owl:GetAttribute('Status') == 2 then pgravity = 0 end
                 end
             end
+
             local aimPart = targetPart(ent, PartName)
             if not aimPart then return nil end
             local vel = projectile == 'telepearl' and Vector3.zero or aimPart.AssemblyLinearVelocity
             local airborne = (ent.Humanoid and ent.Humanoid.FloorMaterial == Enum.Material.Air) or math.abs(ent.RootPart.AssemblyLinearVelocity.Y) > 0.01
             local jump = ent.Jumping and 42.6 or nil
+
+            -- 弾道予測
             local aim, travel = solve(OffsetPosition, Speed, Gravity, aimPart.Position, vel, pgravity, ent.HipHeight, jump, airborne, ent)
             if not aim or not travel or travel > Lifetime then return nil end
+
+            -- 水平/垂直予測のスケール適用
             if Horizontal.Value ~= 1 or Vertical.Value ~= 1 then
                 local rise = (vel.Y * travel) - (pgravity * travel * travel * 0.5)
                 local lead = Vector3.new(vel.X * travel * (Horizontal.Value - 1), rise * (Vertical.Value - 1), vel.Z * travel * (Horizontal.Value - 1))
                 local a2, t2 = solve(OffsetPosition, Speed, Gravity, aimPart.Position + lead, vel, pgravity, ent.HipHeight, jump, airborne, ent)
                 if a2 then aim, travel = a2, t2 or travel end
             end
+
             local dir = aim - OffsetPosition
             if dir.Magnitude <= 0.001 then return nil end
             local launchVel = dir.Unit * Speed
+
+            -- 壁越しチェック
             if Targets.Walls.Enabled then
                 if not filtered then
                     local ignore = {gameCamera, lplr.Character}
@@ -5700,7 +5735,9 @@ run(function()
                 end
                 if not arcClear(OffsetPosition, launchVel, Gravity, travel) then return nil end
             end
+
             store.hitchance.ProjectileAimbot = {Value = hitChance(ent, travel), Clock = tick()}
+
             return {
                 initialVelocity = launchVel,
                 positionFrom = OffsetPosition,
@@ -5710,6 +5747,7 @@ run(function()
             }
         end
 
+        -- ターゲットの検索とソート
         local list = entitylib.AllPosition({
             Part = 'RootPart',
             Range = Distance.Value,
@@ -5718,6 +5756,7 @@ run(function()
             Origin = selfPos,
             Sort = sortmethods and sortmethods[Sort.Value or 'Distance'] or nil
         }) or {}
+
         local sorter = sortmethods and sortmethods[Sort.Value or 'Distance'] or nil
         if sorter then
             pcall(function()
@@ -5728,16 +5767,21 @@ run(function()
                 end)
             end)
         end
+
         local mouse = mouseOrigin()
         local Attempts, Started = 0, os.clock()
+
+        -- FOV内のターゲットに対して順に計算
         for _, ent in list do
             if Attempts >= 10 or (Attempts > 0 and (os.clock() - Started) > 0.0015) then break end
             if not ent.RootPart or not ent.Character then continue end
             if MiloCheck.Enabled and isDisguised(ent) then continue end
             if (ent.RootPart.Position - selfPos).Magnitude > Distance.Value then continue end
+
             local sp, vis = gameCamera:WorldToViewportPoint(ent.RootPart.Position)
             if not vis then continue end
             if (Vector2.new(sp.X, sp.Y) - mouse).Magnitude > FOV.Value then continue end
+
             Attempts += 1
             local values = GetValues(ent)
             if values then
@@ -5745,18 +5789,23 @@ run(function()
                 return values
             end
         end
+
         return nil
     end
 
+    -- モジュール本体
     ProjectileAimbot = vape.Categories.Blatant:CreateModule({
         Name = 'Projectile Aimbot',
         Function = function(callback)
             if CircleObject then CircleObject.Visible = callback end
+
             if callback then
                 MapCheck.FilterDescendantsInstances = {workspace:FindFirstChild('Map')}
                 ProjectileAimbot:Clean(runService.RenderStepped:Connect(function()
                     if CircleObject then CircleObject.Position = mouseOrigin() end
                 end))
+
+                -- ★ 追加したフック処理：ゲームの発射計算関数を上書きする
                 launchHook = bedwars.ProjectileLaunchHook:Add('ProjectileAimbot', 100, function(nextLaunch, ...)
                     local self, LaunchData, WorldMeta, Origin, ShootPosition = ...
                     if ProjectileAimbot.Enabled and entitylib.isAlive and type(LaunchData) == 'table' then
@@ -5765,6 +5814,8 @@ run(function()
                     end
                     return nextLaunch(...)
                 end)
+
+                -- Terraキットのブロックキック用フック
                 local ctrl = bedwars.BlockKickerKitController
                 if ctrl and type(ctrl.getKickBlockProjectileOriginPosition) == 'function' and type(debug.getstack) == 'function' then
                     oldKick = ctrl.getKickBlockProjectileOriginPosition
@@ -5785,8 +5836,8 @@ run(function()
                                         local stack = debug.getstack(2)
                                         if type(stack) == 'table' then
                                             for i, v in pairs(stack) do
-                                                if v == dir then 
-                                                    debug.setstack(2, i, CFrame.lookAt(origin, aim).LookVector) 
+                                                if v == dir then
+                                                    debug.setstack(2, i, CFrame.lookAt(origin, aim).LookVector)
                                                 end
                                             end
                                         end
@@ -5799,6 +5850,7 @@ run(function()
                     end
                 end
             else
+                -- オフにした時のクリーンアップ
                 if launchHook then launchHook() launchHook = nil end
                 if oldKick and bedwars.BlockKickerKitController then
                     bedwars.BlockKickerKitController.getKickBlockProjectileOriginPosition = oldKick
@@ -5808,7 +5860,10 @@ run(function()
         end,
         Tooltip = 'Silently adjusts your aim towards the enemy'
     })
+
+    -- UIオプション群
     Targets = ProjectileAimbot:CreateTargets({Players = true, Walls = true})
+
     local methods = {'Distance', 'Damage'}
     if sortmethods then
         for i in pairs(sortmethods) do
@@ -5816,38 +5871,51 @@ run(function()
         end
     end
     Sort = ProjectileAimbot:CreateDropdown({Name = 'Target Mode', List = methods, Default = 'Distance'})
+
     TargetPart = ProjectileAimbot:CreateDropdown({
         Name = 'Part',
         List = {'RootPart', 'Head', 'Torso', 'Left arm', 'Right arm', 'Left leg', 'Right leg', 'Random', 'Dynamic'},
         Tooltip = 'Dynamic aims at the head with headshot bows (tactical / headhunter / Archer) and the body with everything else'
     })
+
     FOV = ProjectileAimbot:CreateSlider({
         Name = 'FOV', Min = 1, Max = 1000, Default = 1000,
         Function = function(val) if CircleObject then CircleObject.Radius = val end end
     })
+
     Distance = ProjectileAimbot:CreateSlider({
         Name = 'Distance', Min = 1, Max = 1000, Default = 1000,
         Suffix = function(v) return v == 1 and 'stud' or 'studs' end
     })
+
     Horizontal = ProjectileAimbot:CreateSlider({Name = 'Horizontal prediction', Min = 0, Max = 2, Default = 1, Decimal = 100,
         Tooltip = 'Scales how far ahead of the target you aim sideways'})
+
     Vertical = ProjectileAimbot:CreateSlider({Name = 'Vertical prediction', Min = 0, Max = 2, Default = 1, Decimal = 100,
         Tooltip = 'Scales how far ahead you aim while it rises or falls'})
+
     AutoCharge = ProjectileAimbot:CreateToggle({
         Name = 'Auto Charge', Default = true,
         Function = function(call) if AimChange.Object then AimChange.Object.Visible = call end end,
         Tooltip = 'Fully charges your bow so the projectile deals more damage'
     })
+
     AimChange = ProjectileAimbot:CreateToggle({Name = 'Aim change', Default = true, Darker = true, Visible = true,
         Tooltip = 'Changes your trajectory to match charge percentage'})
+
     OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true,
         Tooltip = 'Aims everything that is not an arrow or a splash potion'})
+
     UseUmeko = ProjectileAimbot:CreateToggle({Name = 'Use umeko', Tooltip = "Aims umeko's chakram even with Other Projectiles off"})
+
     Potions = ProjectileAimbot:CreateToggle({Name = 'Shoot pots', Default = true,
         Tooltip = 'Aims heal, poison and sleep splash potions'})
+
     Blacklist = ProjectileAimbot:CreateTextList({Name = 'Blacklist', Default = {'gloop', 'telepearl'}, Darker = true, Placeholder = 'projectile'})
+
     MiloCheck = ProjectileAimbot:CreateToggle({Name = 'Milo check', Default = true,
         Tooltip = 'Skips Milo players while they are disguised as a block'})
+
     ProjectileAimbot:CreateToggle({
         Name = 'Range Circle',
         Function = function(callback)
@@ -5873,12 +5941,16 @@ run(function()
             end
         end
     })
+
     CircleColor = ProjectileAimbot:CreateColorSlider({Name = 'Circle Color', Darker = true, Visible = false,
         Function = function(h, sa, v) if CircleObject then CircleObject.Color = Color3.fromHSV(h, sa, v) end end})
+
     CircleTransparency = ProjectileAimbot:CreateSlider({Name = 'Transparency', Min = 0, Max = 1, Decimal = 10, Default = 0.5, Darker = true, Visible = false,
         Function = function(v) if CircleObject then CircleObject.Transparency = 1 - v end end})
+
     CircleThickness = ProjectileAimbot:CreateSlider({Name = 'Thickness', Min = 1, Max = 10, Decimal = 10, Default = 1, Darker = true, Visible = false,
         Function = function(v) if CircleObject then CircleObject.Thickness = v end end})
+
     CircleFilled = ProjectileAimbot:CreateToggle({Name = 'Circle Filled', Darker = true, Visible = false,
         Function = function(call) if CircleObject then CircleObject.Filled = call end end})
 end)
