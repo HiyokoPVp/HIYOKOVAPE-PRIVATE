@@ -5539,22 +5539,27 @@ end)
 	
 run(function()
 	-- ============================================================
-	-- ProjectileAimbot : hooks ProjectileController.calculateImportantLaunchValues
-	--   prediction.SolveTrajectory で弾道を解いて initialVelocity を差し替える
-	--   preview beam (enableBeam) も同じ関数を通るので自動で補正される
+	-- ProjectileAimbot
+	--   bedwars.ProjectileController.calculateImportantLaunchValues を
+	--   チェーンフックして initialVelocity だけ prediction で差し替える。
+	--   positionFrom はゲーム側の BulletOrigin をそのまま使う。
+	--   enableBeam も同じ関数を通るのでプレビュービームも自動補正される。
 	-- ============================================================
-	local ProjectileAimbot
-	local Targets, Sort, Range, FOV, AimPart, VerticalOffset
-	local Mouse, GUI, Limit, LegitCheck, ArcCheck, ShowFOV, ShowTarget
-	local LatencyScale, MinTime, MaxTime, StickTime, UpdateRate
-	local TargetColor, AttackColor, FOVColor
 
-	local oldCalc = nil
+	local ProjectileAimbot
+	local Targets, Sort, AimPart, Range, FOV, VerticalOffset
+	local IgnoreWalls, IgnoreInvis, IgnorePlayer, IgnoredList, UseKillauraTarget
+	local Mouse, GUI, Limit, LegitCheck, ArcCheck
+	local StickTime, UpdateRate, LatencyScale, MinTime, MaxTime
+	local ShowTarget, TargetColor, AttackColor, ShowFOV, FOVColor
+
+	-- ---------- state ----------
 	local hooked = false
+	local nextCalc = nil      -- フックを挿んだ時点の元の関数
+	local wrapper = nil       -- 自分が差し込んだ関数
 	local lastEnt, lastSeen = nil, 0
-	local box = nil
-	local fovCircle = nil
-	local rand = Random.new()
+	local lastScan = 0
+	local box, fovCircle = nil, nil
 
 	local arcParams = RaycastParams.new()
 	arcParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -5564,7 +5569,9 @@ run(function()
 	floorParams.FilterType = Enum.RaycastFilterType.Include
 	floorParams.RespectCanCollide = true
 
-	-- ---------- helpers ----------
+	-- ============================================================
+	-- helpers
+	-- ============================================================
 	local function getMousePosition()
 		if inputService.TouchEnabled then
 			return gameCamera.ViewportSize / 2
@@ -5576,6 +5583,10 @@ run(function()
 		local sp, vis = gameCamera:WorldToViewportPoint(pos)
 		if not vis then return math.huge end
 		return (Vector2.new(sp.X, sp.Y) - getMousePosition()).Magnitude
+	end
+
+	local function fovRadius()
+		return (FOV.Value / 360) * (gameCamera.ViewportSize.Y / 2)
 	end
 
 	local function isInvisible(ent)
@@ -5608,23 +5619,20 @@ run(function()
 		if not ent.Targetable then return false end
 		if ent.Health <= 0 then return false end
 		if ent.Character:HasTag('ItemDrop') or ent.Character:HasTag('petrified-player') then return false end
-		if not ent.Player and not Targets.NPCs.Enabled then return false end
 		if ent.Player and not Targets.Players.Enabled then return false end
+		if not ent.Player and not Targets.NPCs.Enabled then return false end
 		if IgnoreInvis.Enabled and isInvisible(ent) then return false end
 		if IgnorePlayer.Enabled and ent.Player and table.find(IgnoredList.ListEnabled or {}, ent.Player.Name) then return false end
-		local dist = (ent.RootPart.Position - origin).Magnitude
-		if dist > Range.Value then return false end
+		if (ent.RootPart.Position - origin).Magnitude > Range.Value then return false end
 		if IgnoreWalls.Enabled and isBehindWall(origin, ent) then return false end
-		if FOV.Value < 360 and screenDistance(ent.RootPart.Position) > (FOV.Value / 360) * (gameCamera.ViewportSize.Y / 2) then return false end
+		if FOV.Value < 360 and screenDistance(ent.RootPart.Position) > fovRadius() then return false end
 		return true
 	end
 
 	local function getTarget(origin)
-		-- killaura / silent aura のターゲットを優先
 		if UseKillauraTarget.Enabled and store.KillauraTarget and validTarget(store.KillauraTarget, origin) then
 			return store.KillauraTarget
 		end
-		-- ターゲット固定（ちらつき防止）
 		if StickTime.Value > 0 and lastEnt and (tick() - lastSeen) < StickTime.Value and validTarget(lastEnt, origin) then
 			return lastEnt
 		end
@@ -5647,9 +5655,13 @@ run(function()
 
 	local function getAimPoint(ent)
 		local root = ent.RootPart
+		local offset = Vector3.new(0, VerticalOffset.Value, 0)
+
 		if AimPart.Value == 'Head' and ent.Head then
-			return ent.Head.Position + Vector3.new(0, VerticalOffset.Value, 0), root.Position
-		elseif AimPart.Value == 'Closest' then
+			return ent.Head.Position + offset, root.Position
+		end
+
+		if AimPart.Value == 'Closest' then
 			local best, mag = root.Position, math.huge
 			for _, v in ent.Character:GetChildren() do
 				if v:IsA('BasePart') and v.CanQuery ~= false then
@@ -5659,43 +5671,62 @@ run(function()
 					end
 				end
 			end
-			return best + Vector3.new(0, VerticalOffset.Value, 0), root.Position
+			return best + offset, root.Position
 		end
-		return root.Position + Vector3.new(0, VerticalOffset.Value, 0), root.Position
+
+		return root.Position + offset, root.Position
 	end
 
-	-- ---------- launch values hook ----------
-	local function calculate(self, handler, preview, tool, positionOverride)
-		local result = oldCalc(self, handler, preview, tool, positionOverride)
-		if not ProjectileAimbot.Enabled or not result then return result end
-		if not entitylib.isAlive then return result end
+	local function clearBox()
+		if box then box.Adornee = nil end
+	end
 
-		-- 発射条件
-		if GUI.Enabled and bedwars.AppController and bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN) then return result end
-		if Mouse.Enabled and not inputService:IsMouseButtonPressed(0) and not inputService:IsMouseButtonPressed(1) then return result end
-		if LegitCheck.Enabled and not self.isTargeting then return result end
+	-- ============================================================
+	-- launch condition
+	-- ============================================================
+	local function canRedirect(self)
+		if not ProjectileAimbot.Enabled then return false end
+		if not entitylib.isAlive then return false end
+		if GUI.Enabled and bedwars.AppController and bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN) then return false end
+		if Mouse.Enabled and not inputService:IsMouseButtonPressed(0) and not inputService:IsMouseButtonPressed(1) then return false end
+		if LegitCheck.Enabled and not self.isTargeting then return false end
 		if Limit.Enabled then
 			local hand = store.hand
-			if not (hand and hand.tool and itemMeta(hand.tool.Name).projectileSource) then return result end
+			if not (hand and hand.tool and itemMeta(hand.tool.Name).projectileSource) then return false end
 		end
-		if (tick() - (getgenv().PABLastScan or 0)) < (1 / UpdateRate.Value) and lastEnt then
-			-- スキャンレート制限中はキャッシュしたターゲットで解く
-		end
+		return true
+	end
+
+	-- ============================================================
+	-- hook body
+	-- ============================================================
+	local function calculate(original, self, handler, preview, tool, positionOverride)
+		local result = original(self, handler, preview, tool, positionOverride)
+		if not result or not canRedirect(self) then return result end
+		if typeof(result.initialVelocity) ~= 'Vector3' then return result end
+		if typeof(result.positionFrom) ~= 'Vector3' then return result end
+
+		local speed = result.initialVelocity.Magnitude
+		if speed <= 0.01 then return result end
 
 		local ok, meta = pcall(function() return handler:getProjectileMeta() end)
 		if not ok or type(meta) ~= 'table' then return result end
 
-		local speed = result.initialVelocity.Magnitude
-		if speed <= 0.01 then return result end
 		local gravity = result.gravitationalAcceleration or meta.gravitationalAcceleration or 196.2
 		local origin = result.positionFrom
-		if typeof(origin) ~= 'Vector3' then return result end
 
-		getgenv().PABLastScan = tick()
-		local ent = getTarget(origin)
+		-- スキャンレート制限（キャッシュしたターゲットで解き直す）
+		local ent
+		if (tick() - lastScan) < (1 / UpdateRate.Value) and lastEnt and validTarget(lastEnt, origin) then
+			ent = lastEnt
+		else
+			lastScan = tick()
+			ent = getTarget(origin)
+		end
+
 		if not ent then
 			lastEnt = nil
-			if box then box.Adornee = nil end
+			clearBox()
 			return result
 		end
 		lastEnt, lastSeen = ent, tick()
@@ -5705,32 +5736,29 @@ run(function()
 		local vel = ent.RootPart.AssemblyLinearVelocity
 		local airborne = (ent.Humanoid and ent.Humanoid.FloorMaterial == Enum.Material.Air) or math.abs(vel.Y) > 0.01
 
-		-- 床参照用フィルタ（prediction の TraceFloor に渡す）
+		-- prediction の TraceFloor に渡す床フィルタ
 		local map = workspace:FindFirstChild('Map')
-		if map then
-			floorParams.FilterDescendantsInstances = {map}
-		else
-			floorParams.FilterDescendantsInstances = {}
-		end
+		floorParams.FilterDescendantsInstances = map and {map} or {}
 
 		if LatencyScale.Value ~= 1 and prediction.setLatency then
 			pcall(prediction.setLatency, (store.ping and store.ping.total or 0) * LatencyScale.Value)
 		end
 
 		local minimum = MinTime.Value > 0 and MinTime.Value or nil
+		local jump = ent.Jumping and 42.6 or nil
+
 		local aim, impact, travel = prediction.SolveTrajectory(
 			origin, speed, gravity, aimPos, vel, workspace.Gravity,
-			ent.HipHeight, ent.Jumping and 42.6 or nil,
-			floorParams, airborne, rootPos, ent.RootPart, minimum, true
+			ent.HipHeight, jump, floorParams, airborne, rootPos, ent.RootPart, minimum, true
 		)
 		if not aim then
 			aim, impact, travel = prediction.SolveTrajectory(
 				origin, speed, gravity, aimPos, vel, workspace.Gravity,
-				ent.HipHeight, ent.Jumping and 42.6 or nil
+				ent.HipHeight, jump
 			)
 		end
 		if not aim then
-			if box then box.Adornee = nil end
+			clearBox()
 			return result
 		end
 
@@ -5738,22 +5766,24 @@ run(function()
 		if ArcCheck.Enabled and travel and type(prediction.IsTrajectoryClear) == 'function' then
 			local ignore = {lplr.Character, gameCamera}
 			for _, e in entitylib.List do
-				if e.Character and e ~= ent then table.insert(ignore, e.Character) end
+				if e.Character and e ~= ent then
+					table.insert(ignore, e.Character)
+				end
 			end
 			arcParams.FilterDescendantsInstances = ignore
-			local clear = select(1, pcall(prediction.IsTrajectoryClear, origin, aim - origin, gravity, travel, arcParams, ent.Character))
-			if clear == false then
-				if box then box.Adornee = nil end
+			local checkOk, clear = pcall(prediction.IsTrajectoryClear, origin, aim - origin, gravity, travel, arcParams, ent.Character)
+			if checkOk and clear == false then
+				clearBox()
 				return result
 			end
 		end
 
 		if MaxTime.Value > 0 and travel and travel > MaxTime.Value then
-			if box then box.Adornee = nil end
+			clearBox()
 			return result
 		end
 
-		local dir = (aim - origin)
+		local dir = aim - origin
 		if dir.Magnitude <= 0.001 then return result end
 
 		if box then
@@ -5767,7 +5797,9 @@ run(function()
 		return result
 	end
 
-	-- ---------- visuals ----------
+	-- ============================================================
+	-- visuals
+	-- ============================================================
 	local function updateVisuals()
 		if ProjectileAimbot.Enabled and ShowFOV.Enabled and FOV.Value < 360 then
 			if not fovCircle then
@@ -5784,14 +5816,27 @@ run(function()
 			if fovCircle then
 				fovCircle.Visible = true
 				fovCircle.Position = getMousePosition()
-				fovCircle.Radius = (FOV.Value / 360) * (gameCamera.ViewportSize.Y / 2)
+				fovCircle.Radius = fovRadius()
 			end
 		elseif fovCircle then
 			fovCircle.Visible = false
 		end
 	end
 
-	-- ---------- module ----------
+	local function createBox()
+		if box then return end
+		box = Instance.new('BoxHandleAdornment')
+		box.AlwaysOnTop = true
+		box.Size = Vector3.new(3, 5, 3)
+		box.CFrame = CFrame.new(0, -0.5, 0)
+		box.ZIndex = 0
+		box.Adornee = nil
+		box.Parent = vape.gui
+	end
+
+	-- ============================================================
+	-- module
+	-- ============================================================
 	ProjectileAimbot = vape.Categories.Combat:CreateModule({
 		Name = 'ProjectileAimbot',
 		Function = function(callback)
@@ -5802,39 +5847,33 @@ run(function()
 					ProjectileAimbot:Toggle()
 					return
 				end
-				oldCalc = ctrl.calculateImportantLaunchValues
-				ctrl.calculateImportantLaunchValues = function(...)
+
+				-- チェーンフック：オリジナルを直接書き換えず nextCalc 経由で呼ぶ
+				nextCalc = ctrl.calculateImportantLaunchValues
+				wrapper = function(...)
 					local ok, res = xpcall(calculate, function(err)
 						if tick() > (getgenv().PABWarnAt or 0) then
 							getgenv().PABWarnAt = tick() + 5
 							warn('[ProjectileAimbot] ' .. tostring(err))
 						end
-						return oldCalc(...)
-					end, ...)
-					if ok then return res end
-					return oldCalc(...)
+					end, nextCalc, ...)
+					if ok and res ~= nil then return res end
+					return nextCalc(...)
 				end
+				ctrl.calculateImportantLaunchValues = wrapper
 				hooked = true
 
-				if ShowTarget.Enabled and not box then
-					box = Instance.new('BoxHandleAdornment')
-					box.AlwaysOnTop = true
-					box.Size = Vector3.new(3, 5, 3)
-					box.CFrame = CFrame.new(0, -0.5, 0)
-					box.ZIndex = 0
-					box.Adornee = nil
-					box.Parent = vape.gui
-				end
+				if ShowTarget.Enabled then createBox() end
 
 				ProjectileAimbot:Clean(runService.RenderStepped:Connect(updateVisuals))
 				ProjectileAimbot:Clean(function()
-					if hooked and bedwars.ProjectileController and oldCalc then
-						bedwars.ProjectileController.calculateImportantLaunchValues = oldCalc
+					if hooked and bedwars.ProjectileController and bedwars.ProjectileController.calculateImportantLaunchValues == wrapper then
+						bedwars.ProjectileController.calculateImportantLaunchValues = nextCalc
 					end
-					hooked, oldCalc = false, nil
-					lastEnt, lastSeen = nil, 0
+					hooked, wrapper, nextCalc = false, nil, nil
+					lastEnt, lastSeen, lastScan = nil, 0, 0
 					if prediction.setLatency then pcall(prediction.setLatency, nil) end
-					if box then box.Adornee = nil end
+					clearBox()
 					if fovCircle then fovCircle.Visible = false end
 				end)
 			else
@@ -5845,6 +5884,7 @@ run(function()
 		Tooltip = 'Redirects projectile launches onto predicted target positions.\nHooks calculateImportantLaunchValues so bows, crossbows, snowballs, fireballs and kit projectiles all get corrected.'
 	})
 
+	-- ---------- targeting ----------
 	Targets = ProjectileAimbot:CreateTargets({Players = true, NPCs = true, Walls = false})
 
 	local methods = {'Distance', 'Mouse'}
@@ -5870,26 +5910,22 @@ run(function()
 	})
 
 	FOV = ProjectileAimbot:CreateSlider({
-		Name = 'FOV', Min = 1, Max = 360, Default = 90,
-		Suffix = 'degrees',
+		Name = 'FOV', Min = 1, Max = 360, Default = 90, Suffix = 'degrees',
 		Function = updateVisuals,
 		Tooltip = 'Screen space cone around your crosshair. 360 disables the check'
 	})
 
 	VerticalOffset = ProjectileAimbot:CreateSlider({
-		Name = 'Y offset', Min = -3, Max = 3, Default = 0, Decimal = 10,
-		Suffix = 'studs'
+		Name = 'Y offset', Min = -3, Max = 3, Default = 0, Decimal = 10, Suffix = 'studs'
 	})
 
 	IgnoreWalls = ProjectileAimbot:CreateToggle({
-		Name = 'Ignore behind wall',
-		Default = true,
+		Name = 'Ignore behind wall', Default = true,
 		Tooltip = 'Skips targets with a solid block between you and them'
 	})
 
 	IgnoreInvis = ProjectileAimbot:CreateToggle({
-		Name = 'Ignore invisible players',
-		Default = true
+		Name = 'Ignore invisible players', Default = true
 	})
 
 	IgnorePlayer = ProjectileAimbot:CreateToggle({
@@ -5904,10 +5940,10 @@ run(function()
 
 	UseKillauraTarget = ProjectileAimbot:CreateToggle({
 		Name = 'Use killaura target',
-		Default = false,
 		Tooltip = 'Locks onto whatever Killaura / Silent Aura is currently hitting'
 	})
 
+	-- ---------- conditions ----------
 	Mouse = ProjectileAimbot:CreateToggle({Name = 'Require mouse down'})
 	GUI = ProjectileAimbot:CreateToggle({Name = 'GUI check', Default = true})
 	Limit = ProjectileAimbot:CreateToggle({
@@ -5923,9 +5959,9 @@ run(function()
 		Tooltip = 'Raycasts along the solved arc and drops the shot if terrain blocks it'
 	})
 
+	-- ---------- tuning ----------
 	StickTime = ProjectileAimbot:CreateSlider({
-		Name = 'Target stick', Min = 0, Max = 1, Default = 0.25, Decimal = 100,
-		Suffix = 'seconds',
+		Name = 'Target stick', Min = 0, Max = 1, Default = 0.25, Decimal = 100, Suffix = 'seconds',
 		Tooltip = 'Keeps the same target for this long so the aim does not flicker'
 	})
 	UpdateRate = ProjectileAimbot:CreateSlider({
@@ -5943,25 +5979,25 @@ run(function()
 		Tooltip = '0 disables the limit'
 	})
 
+	-- ---------- render ----------
 	ShowTarget = ProjectileAimbot:CreateToggle({
 		Name = 'Show target', Default = true,
 		Function = function(call)
 			TargetColor.Object.Visible = call
 			AttackColor.Object.Visible = call
-			if call and ProjectileAimbot.Enabled and not box then
-				box = Instance.new('BoxHandleAdornment')
-				box.AlwaysOnTop = true
-				box.Size = Vector3.new(3, 5, 3)
-				box.CFrame = CFrame.new(0, -0.5, 0)
-				box.ZIndex = 0
-				box.Parent = vape.gui
-			elseif box then
-				box.Adornee = nil
+			if call and ProjectileAimbot.Enabled then
+				createBox()
+			else
+				clearBox()
 			end
 		end
 	})
-	TargetColor = ProjectileAimbot:CreateColorSlider({Name = 'Target color', Darker = true, DefaultHue = 0.6, DefaultOpacity = 0.5, Visible = false})
-	AttackColor = ProjectileAimbot:CreateColorSlider({Name = 'Locked color', Darker = true, DefaultOpacity = 0.5, Visible = false})
+	TargetColor = ProjectileAimbot:CreateColorSlider({
+		Name = 'Target color', Darker = true, DefaultHue = 0.6, DefaultOpacity = 0.5, Visible = false
+	})
+	AttackColor = ProjectileAimbot:CreateColorSlider({
+		Name = 'Locked color', Darker = true, DefaultOpacity = 0.5, Visible = false
+	})
 
 	ShowFOV = ProjectileAimbot:CreateToggle({
 		Name = 'Show FOV',
