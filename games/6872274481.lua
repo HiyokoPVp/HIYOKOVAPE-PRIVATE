@@ -5687,18 +5687,16 @@ run(function()
                                 local aim = select(1, solve(origin, 100, 20, part.Position, ent.RootPart.AssemblyLinearVelocity, workspace.Gravity, ent.HipHeight, ent.Jumping and 42.6 or nil, false, ent))
                                 if aim then
                                     pcall(function()
-                                        if type(debug.getstack) ~= 'function' or type(debug.setstack) ~= 'function' then 
-                                            return oldKick and oldKick(...) 
+                                        if type(debug.getstack) ~= 'function' or type(debug.setstack) ~= 'function' then
+                                            return oldKick and oldKick(...)
                                         end
-                                        
                                         local stack = debug.getstack(2)
                                         local iter = type(stack) == 'function' and stack or (type(stack) == 'table' and pairs(stack)) or nil
-                                        
                                         if iter then
                                             for i, v in iter do
-                                                if v == dir then 
+                                                if v == dir then
                                                     local lookVector = CFrame.new(origin, aim).LookVector
-                                                    debug.setstack(2, i, lookVector) 
+                                                    debug.setstack(2, i, lookVector)
                                                 end
                                             end
                                         end
@@ -5707,7 +5705,7 @@ run(function()
                                 end
                             end
                         end
-                        return oldKick(...)
+                        return oldKick and oldKick(...) or nil
                     end
                 end
             else
