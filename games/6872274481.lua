@@ -103,7 +103,60 @@ if type(whitelist) ~= 'table' or type(whitelist.tag) ~= 'function' then
 end
 whitelist.customtags = whitelist.customtags or {}
 -- [patch] library aliases aligned with CATVAPE (getfontbounds / getvapeasset)
-local prediction = vape.Libraries.prediction
+-- ==== prediction bootstrap ====
+-- CATVAPE の prediction.lua は _G.vape / used_init が無いと {} を返す。
+-- 自分で満たしてからロードし直す。ローダー経路に依存しない。
+local function loadPrediction()
+	local existing = vape.Libraries and vape.Libraries.prediction
+	if type(existing) == 'table' and type(existing.SolveTrajectory) == 'function' then
+		return existing
+	end
+
+	-- ガードを満たす（既に立ってても害はない）
+	_G.vape = vape
+	getgenv().used_init = true
+
+	local dir = vape.Directory or (shared.VapeDeveloper and 'catprivate') or 'catsix'
+	local path = dir .. '/libraries/prediction.lua'
+
+	local src
+	if type(isfile) == 'function' and type(readfile) == 'function' and isfile(path) then
+		src = readfile(path)
+	else
+		local ok, res = pcall(function()
+			return game:HttpGet('https://api.catvape.dev/download/src/libraries/prediction.lua', true)
+		end)
+		if ok and type(res) == 'string' and res ~= '' and res ~= '404: Not Found' then
+			src = res
+			if type(writefile) == 'function' then
+				pcall(writefile, path, res)
+			end
+		end
+	end
+
+	if not src then
+		warn('[hiyokovape] prediction.lua unavailable')
+		return nil
+	end
+
+	local chunk, err = loadstring(src, 'prediction')
+	if not chunk then
+		warn('[hiyokovape] prediction compile failed: ' .. tostring(err))
+		return nil
+	end
+
+	local ok, lib = pcall(chunk)
+	if not ok or type(lib) ~= 'table' or type(lib.SolveTrajectory) ~= 'function' then
+		warn('[hiyokovape] prediction returned no solver')
+		return nil
+	end
+
+	vape.Libraries.prediction = lib
+	return lib
+end
+
+local prediction = loadPrediction()
+-- ==== bootstrap end ====
 local getfontsize = vape.Libraries.getfontbounds or vape.Libraries.getfontsize
 local getcustomasset = vape.Libraries.getvapeasset or vape.Libraries.getcustomasset
 if type(getfontsize) ~= 'function' then
