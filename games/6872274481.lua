@@ -5539,27 +5539,64 @@ end)
 	
 run(function()
 	-- ============================================================
-	-- ProjectileAimbot
-	--   bedwars.ProjectileController.calculateImportantLaunchValues を
-	--   チェーンフックして initialVelocity だけ prediction で差し替える。
-	--   positionFrom はゲーム側の BulletOrigin をそのまま使う。
-	--   enableBeam も同じ関数を通るのでプレビュービームも自動補正される。
+	-- ProjectileAimbot Safe
+	-- Hooks bedwars.ProjectileController.calculateImportantLaunchValues
+	-- Prediction is solved on Heartbeat.
+	-- The launch hook only applies cached velocity, so drawing the bow
+	-- does not run heavy prediction every render frame.
 	-- ============================================================
 
 	local ProjectileAimbot
-	local Targets, Sort, AimPart, Range, FOV, VerticalOffset
-	local IgnoreWalls, IgnoreInvis, IgnorePlayer, IgnoredList, UseKillauraTarget
-	local Mouse, GUI, Limit, LegitCheck, ArcCheck
-	local StickTime, UpdateRate, LatencyScale, MinTime, MaxTime
-	local ShowTarget, TargetColor, AttackColor, ShowFOV, FOVColor
 
-	-- ---------- state ----------
+	local Targets
+	local Sort
+	local AimPart
+	local Range
+	local FOV
+	local VerticalOffset
+
+	local IgnoreWalls
+	local IgnoreInvis
+	local IgnorePlayer
+	local IgnoredList
+	local UseKillauraTarget
+
+	local Mouse
+	local GUI
+	local Limit
+	local LegitCheck
+	local ArcCheck
+
+	local StickTime
+	local UpdateRate
+	local LatencyScale
+	local MinTime
+	local MaxTime
+
+	local ShowTarget
+	local TargetColor
+	local AttackColor
+
+	local controller = nil
+	local originalCalc = nil
+	local wrapper = nil
 	local hooked = false
-	local nextCalc = nil      -- フックを挿んだ時点の元の関数
-	local wrapper = nil       -- 自分が差し込んだ関数
-	local lastEnt, lastSeen = nil, 0
-	local lastScan = 0
-	local box, fovCircle = nil, nil
+
+	local box = nil
+	local currentTarget = nil
+	local currentSolution = nil
+	local lastTargetSeen = 0
+	local lastSolve = 0
+	local lastErrorAt = 0
+
+	local predictionBusy = false
+	local latencyOverridden = false
+
+	local flatMask = Vector3.new(1, 0, 1)
+
+	local wallParams = RaycastParams.new()
+	wallParams.FilterType = Enum.RaycastFilterType.Exclude
+	wallParams.IgnoreWater = true
 
 	local arcParams = RaycastParams.new()
 	arcParams.FilterType = Enum.RaycastFilterType.Exclude
@@ -5570,72 +5607,165 @@ run(function()
 	floorParams.RespectCanCollide = true
 
 	-- ============================================================
-	-- helpers
+	-- small safe helpers
 	-- ============================================================
+
+	local function warnThrottled(message)
+		local now = os.clock()
+		if now <= lastErrorAt then return end
+		lastErrorAt = now + 5
+		warn('[ProjectileAimbot] ' .. tostring(message))
+	end
+
+	local function validNumber(value)
+		return type(value) == 'number' and value == value and value < math.huge and value > -math.huge
+	end
+
+	local function validVector(value)
+		return typeof(value) == 'Vector3'
+			and validNumber(value.X)
+			and validNumber(value.Y)
+			and validNumber(value.Z)
+	end
+
 	local function getMousePosition()
 		if inputService.TouchEnabled then
 			return gameCamera.ViewportSize / 2
 		end
-		return inputService:GetMouseLocation()
+
+		local ok, pos = pcall(function()
+			return inputService:GetMouseLocation()
+		end)
+
+		if ok and typeof(pos) == 'Vector2' then
+			return pos
+		end
+
+		return gameCamera.ViewportSize / 2
 	end
 
-	local function screenDistance(pos)
-		local sp, vis = gameCamera:WorldToViewportPoint(pos)
-		if not vis then return math.huge end
-		return (Vector2.new(sp.X, sp.Y) - getMousePosition()).Magnitude
+	local function screenDistance(position)
+		if not validVector(position) then return math.huge end
+
+		local ok, screenPos, visible = pcall(function()
+			return gameCamera:WorldToViewportPoint(position)
+		end)
+
+		if not ok or not visible then return math.huge end
+
+		return (Vector2.new(screenPos.X, screenPos.Y) - getMousePosition()).Magnitude
 	end
 
 	local function fovRadius()
 		return (FOV.Value / 360) * (gameCamera.ViewportSize.Y / 2)
 	end
 
+	local function entityAlive(ent)
+		if not ent then return false end
+		if not ent.Character or not ent.Character.Parent then return false end
+		if not ent.RootPart or not ent.RootPart.Parent then return false end
+		if not ent.RootPart:IsDescendantOf(ent.Character) then return false end
+		if ent.Health and ent.Health <= 0 then return false end
+		return true
+	end
+
+	local function isIgnoredPlayer(ent)
+		if not IgnorePlayer.Enabled then return false end
+		if not ent.Player then return false end
+
+		local list = IgnoredList and IgnoredList.ListEnabled or {}
+		return table.find(list, ent.Player.Name) ~= nil
+	end
+
 	local function isInvisible(ent)
 		local char = ent.Character
 		if not char then return false end
-		if char:GetAttribute('Invisible') or char:GetAttribute('IsInvisible') then return true end
-		local root = ent.RootPart
-		if root and root.Transparency >= 1 then
-			local head = ent.Head
-			if not head or head.Transparency >= 1 then return true end
+
+		if char:GetAttribute('Invisible') == true then return true end
+		if char:GetAttribute('IsInvisible') == true then return true end
+		if char:GetAttribute('InvisibleUntil') and (char:GetAttribute('InvisibleUntil') > workspace:GetServerTimeNow()) then
+			return true
 		end
+
+		local root = ent.RootPart
+		local head = ent.Head
+
+		if root and root.Transparency >= 1 then
+			if not head or head.Transparency >= 1 then
+				return true
+			end
+		end
+
 		return false
 	end
 
 	local function isBehindWall(origin, ent)
-		local params = RaycastParams.new()
-		params.FilterType = Enum.RaycastFilterType.Exclude
-		params.IgnoreWater = true
-		params.FilterDescendantsInstances = {lplr.Character, gameCamera}
-		local dir = ent.RootPart.Position - origin
-		local hit = workspace:Raycast(origin, dir, params)
+		if not validVector(origin) then return true end
+		if not entityAlive(ent) then return true end
+
+		wallParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
+
+		local direction = ent.RootPart.Position - origin
+		if direction.Magnitude <= 0.01 then return false end
+
+		local hit = workspace:Raycast(origin, direction, wallParams)
 		if not hit then return false end
+
 		return not hit.Instance:IsDescendantOf(ent.Character)
 	end
 
-	local function validTarget(ent, origin)
-		if not ent or not ent.RootPart or not ent.Character then return false end
-		if not ent.Character.Parent or not ent.RootPart.Parent then return false end
+	local function baseValidTarget(ent, origin)
+		if not entityAlive(ent) then return false end
 		if ent.Player == lplr then return false end
-		if not ent.Targetable then return false end
-		if ent.Health <= 0 then return false end
-		if ent.Character:HasTag('ItemDrop') or ent.Character:HasTag('petrified-player') then return false end
-		if ent.Player and not Targets.Players.Enabled then return false end
-		if not ent.Player and not Targets.NPCs.Enabled then return false end
+		if ent.Targetable == false then return false end
+
+		if ent.Player then
+			if not Targets.Players.Enabled then return false end
+		else
+			if not Targets.NPCs.Enabled then return false end
+		end
+
+		if ent.Character:HasTag('ItemDrop') then return false end
+		if ent.Character:HasTag('petrified-player') then return false end
+
+		if isIgnoredPlayer(ent) then return false end
 		if IgnoreInvis.Enabled and isInvisible(ent) then return false end
-		if IgnorePlayer.Enabled and ent.Player and table.find(IgnoredList.ListEnabled or {}, ent.Player.Name) then return false end
-		if (ent.RootPart.Position - origin).Magnitude > Range.Value then return false end
-		if IgnoreWalls.Enabled and isBehindWall(origin, ent) then return false end
-		if FOV.Value < 360 and screenDistance(ent.RootPart.Position) > fovRadius() then return false end
+
+		local distance = (ent.RootPart.Position - origin).Magnitude
+		if distance > Range.Value then return false end
+
+		if FOV.Value < 360 and screenDistance(ent.RootPart.Position) > fovRadius() then
+			return false
+		end
+
+		if IgnoreWalls.Enabled and isBehindWall(origin, ent) then
+			return false
+		end
+
 		return true
 	end
 
+	local function getSortFunction()
+		if Sort.Value == 'Mouse' then
+			return sortmethods.Cursor or sortmethods.Distance
+		end
+
+		return sortmethods[Sort.Value] or sortmethods.Distance
+	end
+
 	local function getTarget(origin)
-		if UseKillauraTarget.Enabled and store.KillauraTarget and validTarget(store.KillauraTarget, origin) then
+		if UseKillauraTarget.Enabled and store.KillauraTarget and baseValidTarget(store.KillauraTarget, origin) then
 			return store.KillauraTarget
 		end
-		if StickTime.Value > 0 and lastEnt and (tick() - lastSeen) < StickTime.Value and validTarget(lastEnt, origin) then
-			return lastEnt
+
+		if StickTime.Value > 0
+			and currentTarget
+			and (os.clock() - lastTargetSeen) < StickTime.Value
+			and baseValidTarget(currentTarget, origin)
+		then
+			return currentTarget
 		end
+
 		local list = entitylib.AllPosition({
 			Origin = origin,
 			Range = Range.Value,
@@ -5643,13 +5773,15 @@ run(function()
 			Players = Targets.Players.Enabled,
 			NPCs = Targets.NPCs.Enabled,
 			Wallcheck = Targets.Walls.Enabled or nil,
-			Sort = sortmethods[Sort.Value]
+			Sort = getSortFunction()
 		})
+
 		for _, ent in list do
-			if validTarget(ent, origin) then
+			if baseValidTarget(ent, origin) then
 				return ent
 			end
 		end
+
 		return nil
 	end
 
@@ -5657,175 +5789,148 @@ run(function()
 		local root = ent.RootPart
 		local offset = Vector3.new(0, VerticalOffset.Value, 0)
 
-		if AimPart.Value == 'Head' and ent.Head then
+		if AimPart.Value == 'Head' and ent.Head and ent.Head.Parent then
 			return ent.Head.Position + offset, root.Position
 		end
 
 		if AimPart.Value == 'Closest' then
-			local best, mag = root.Position, math.huge
-			for _, v in ent.Character:GetChildren() do
-				if v:IsA('BasePart') and v.CanQuery ~= false then
-					local d = screenDistance(v.Position)
-					if d < mag then
-						best, mag = v.Position, d
+			local best = root.Position
+			local bestDistance = math.huge
+
+			for _, part in ent.Character:GetChildren() do
+				if part:IsA('BasePart') and part.Parent and part.CanQuery ~= false then
+					local distance = screenDistance(part.Position)
+					if distance < bestDistance then
+						best = part.Position
+						bestDistance = distance
 					end
 				end
 			end
+
 			return best + offset, root.Position
 		end
 
 		return root.Position + offset, root.Position
 	end
 
-	local function clearBox()
-		if box then box.Adornee = nil end
+	local function getHipHeight(ent)
+		if validNumber(ent.HipHeight) then
+			return ent.HipHeight
+		end
+
+		local humanoid = ent.Humanoid
+		local root = ent.RootPart
+
+		if humanoid and root then
+			local ok, value = pcall(function()
+				return humanoid.HipHeight + (root.Size.Y / 2)
+			end)
+
+			if ok and validNumber(value) then
+				return value
+			end
+		end
+
+		return 2
 	end
 
-	-- ============================================================
-	-- launch condition
-	-- ============================================================
-	local function canRedirect(self)
-		if not ProjectileAimbot.Enabled then return false end
-		if not entitylib.isAlive then return false end
-		if GUI.Enabled and bedwars.AppController and bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN) then return false end
-		if Mouse.Enabled and not inputService:IsMouseButtonPressed(0) and not inputService:IsMouseButtonPressed(1) then return false end
-		if LegitCheck.Enabled and not self.isTargeting then return false end
-		if Limit.Enabled then
-			local hand = store.hand
-			if not (hand and hand.tool and itemMeta(hand.tool.Name).projectileSource) then return false end
+	local function isAirborne(ent)
+		local root = ent.RootPart
+		local velocity = root.AssemblyLinearVelocity
+
+		if ent.Humanoid then
+			local ok, floorMaterial = pcall(function()
+				return ent.Humanoid.FloorMaterial
+			end)
+
+			if ok and floorMaterial == Enum.Material.Air then
+				return true
+			end
 		end
-		return true
+
+		return math.abs(velocity.Y) > 0.01
 	end
 
-	-- ============================================================
-	-- hook body
-	-- ============================================================
-	local function calculate(original, self, handler, preview, tool, positionOverride)
-		local result = original(self, handler, preview, tool, positionOverride)
-		if not result or not canRedirect(self) then return result end
-		if typeof(result.initialVelocity) ~= 'Vector3' then return result end
-		if typeof(result.positionFrom) ~= 'Vector3' then return result end
-
-		local speed = result.initialVelocity.Magnitude
-		if speed <= 0.01 then return result end
-
-		local ok, meta = pcall(function() return handler:getProjectileMeta() end)
-		if not ok or type(meta) ~= 'table' then return result end
-
-		local gravity = result.gravitationalAcceleration or meta.gravitationalAcceleration or 196.2
-		local origin = result.positionFrom
-
-		-- スキャンレート制限（キャッシュしたターゲットで解き直す）
-		local ent
-		if (tick() - lastScan) < (1 / UpdateRate.Value) and lastEnt and validTarget(lastEnt, origin) then
-			ent = lastEnt
-		else
-			lastScan = tick()
-			ent = getTarget(origin)
-		end
-
-		if not ent then
-			lastEnt = nil
-			clearBox()
-			return result
-		end
-		lastEnt, lastSeen = ent, tick()
-		targetinfo.Targets[ent] = tick() + 1
-
-		local aimPos, rootPos = getAimPoint(ent)
-		local vel = ent.RootPart.AssemblyLinearVelocity
-		local airborne = (ent.Humanoid and ent.Humanoid.FloorMaterial == Enum.Material.Air) or math.abs(vel.Y) > 0.01
-
-		-- prediction の TraceFloor に渡す床フィルタ
+	local function updateFloorFilter()
 		local map = workspace:FindFirstChild('Map')
-		floorParams.FilterDescendantsInstances = map and {map} or {}
+		if map then
+			floorParams.FilterDescendantsInstances = {map}
+		else
+			floorParams.FilterDescendantsInstances = {}
+		end
+	end
 
-		if LatencyScale.Value ~= 1 and prediction.setLatency then
-			pcall(prediction.setLatency, (store.ping and store.ping.total or 0) * LatencyScale.Value)
+	local function updateArcFilter(targetEnt)
+		local filter = {lplr.Character, gameCamera}
+
+		for _, ent in entitylib.List do
+			if ent.Character and ent ~= targetEnt then
+				table.insert(filter, ent.Character)
+			end
 		end
 
-		local minimum = MinTime.Value > 0 and MinTime.Value or nil
-		local jump = ent.Jumping and 42.6 or nil
+		arcParams.FilterDescendantsInstances = filter
+	end
 
-		local aim, impact, travel = prediction.SolveTrajectory(
-			origin, speed, gravity, aimPos, vel, workspace.Gravity,
-			ent.HipHeight, jump, floorParams, airborne, rootPos, ent.RootPart, minimum, true
+	local function trajectoryClear(origin, velocity, gravity, travelTime, targetEnt)
+		if not ArcCheck.Enabled then return true end
+		if not travelTime or travelTime <= 0 then return true end
+		if type(prediction.IsTrajectoryClear) ~= 'function' then return true end
+
+		updateArcFilter(targetEnt)
+
+		local ok, clear = pcall(
+			prediction.IsTrajectoryClear,
+			origin,
+			velocity,
+			gravity,
+			travelTime,
+			arcParams,
+			targetEnt.Character
 		)
-		if not aim then
-			aim, impact, travel = prediction.SolveTrajectory(
-				origin, speed, gravity, aimPos, vel, workspace.Gravity,
-				ent.HipHeight, jump
-			)
-		end
-		if not aim then
-			clearBox()
-			return result
+
+		if not ok then
+			return true
 		end
 
-		-- 弾道の遮蔽チェック
-		if ArcCheck.Enabled and travel and type(prediction.IsTrajectoryClear) == 'function' then
-			local ignore = {lplr.Character, gameCamera}
-			for _, e in entitylib.List do
-				if e.Character and e ~= ent then
-					table.insert(ignore, e.Character)
-				end
+		return clear ~= false
+	end
+
+	local function setPredictionLatency()
+		if not prediction or type(prediction.setLatency) ~= 'function' then return end
+
+		if LatencyScale.Value == 1 then
+			if latencyOverridden then
+				pcall(prediction.setLatency, nil)
+				latencyOverridden = false
 			end
-			arcParams.FilterDescendantsInstances = ignore
-			local checkOk, clear = pcall(prediction.IsTrajectoryClear, origin, aim - origin, gravity, travel, arcParams, ent.Character)
-			if checkOk and clear == false then
-				clearBox()
-				return result
-			end
+			return
 		end
 
-		if MaxTime.Value > 0 and travel and travel > MaxTime.Value then
-			clearBox()
-			return result
+		local ping = store.ping and store.ping.total or 0
+		if not validNumber(ping) then ping = 0 end
+
+		pcall(prediction.setLatency, math.max(ping * LatencyScale.Value, 0))
+		latencyOverridden = true
+	end
+
+	local function resetPredictionLatency()
+		if latencyOverridden and prediction and type(prediction.setLatency) == 'function' then
+			pcall(prediction.setLatency, nil)
 		end
 
-		local dir = aim - origin
-		if dir.Magnitude <= 0.001 then return result end
-
-		if box then
-			box.Adornee = ShowTarget.Enabled and ent.RootPart or nil
-			local col = (travel and travel < 0.35) and AttackColor or TargetColor
-			box.Color3 = Color3.fromHSV(col.Hue, col.Sat, col.Value)
-			box.Transparency = 1 - col.Opacity
-		end
-
-		result.initialVelocity = dir.Unit * speed
-		return result
+		latencyOverridden = false
 	end
 
 	-- ============================================================
 	-- visuals
 	-- ============================================================
-	local function updateVisuals()
-		if ProjectileAimbot.Enabled and ShowFOV.Enabled and FOV.Value < 360 then
-			if not fovCircle then
-				local ok = pcall(function()
-					fovCircle = Drawing.new('Circle')
-					fovCircle.Thickness = 1
-					fovCircle.NumSides = 60
-					fovCircle.Filled = false
-					fovCircle.Transparency = 1 - FOVColor.Opacity
-					fovCircle.Color = Color3.fromHSV(FOVColor.Hue, FOVColor.Sat, FOVColor.Value)
-				end)
-				if not ok then fovCircle = nil end
-			end
-			if fovCircle then
-				fovCircle.Visible = true
-				fovCircle.Position = getMousePosition()
-				fovCircle.Radius = fovRadius()
-			end
-		elseif fovCircle then
-			fovCircle.Visible = false
-		end
-	end
 
 	local function createBox()
 		if box then return end
+
 		box = Instance.new('BoxHandleAdornment')
+		box.Name = 'ProjectileAimbotTarget'
 		box.AlwaysOnTop = true
 		box.Size = Vector3.new(3, 5, 3)
 		box.CFrame = CFrame.new(0, -0.5, 0)
@@ -5834,68 +5939,422 @@ run(function()
 		box.Parent = vape.gui
 	end
 
+	local function clearBox()
+		if box then
+			box.Adornee = nil
+		end
+	end
+
+	local function destroyBox()
+		if box then
+			box:Destroy()
+			box = nil
+		end
+	end
+
+	local function updateBox()
+		if not ShowTarget.Enabled then
+			clearBox()
+			return
+		end
+
+		createBox()
+
+		local solution = currentSolution
+		if not solution or not solution.entity or not entityAlive(solution.entity) then
+			clearBox()
+			return
+		end
+
+		if os.clock() - solution.time > 0.35 then
+			clearBox()
+			return
+		end
+
+		box.Adornee = solution.entity.RootPart
+
+		local colorOption = solution.travelTime and solution.travelTime < 0.35 and AttackColor or TargetColor
+		box.Color3 = Color3.fromHSV(colorOption.Hue, colorOption.Sat, colorOption.Value)
+		box.Transparency = 1 - colorOption.Opacity
+	end
+
+	-- ============================================================
+	-- conditions
+	-- ============================================================
+
+	local function guiBlocked()
+		if not GUI.Enabled then return false end
+		if not bedwars.AppController then return false end
+		if not bedwars.UILayers then return false end
+
+		local ok, open = pcall(function()
+			return bedwars.AppController:isLayerOpen(bedwars.UILayers.MAIN)
+		end)
+
+		return ok and open == true
+	end
+
+	local function holdingProjectileSource()
+		if not Limit.Enabled then return true end
+
+		local hand = store.hand
+		if not hand or not hand.tool then return false end
+
+		local meta = itemMeta(hand.tool.Name)
+		return meta and meta.projectileSource ~= nil
+	end
+
+	local function canRedirect(self)
+		if not ProjectileAimbot.Enabled then return false end
+		if not entitylib.isAlive then return false end
+		if guiBlocked() then return false end
+		if not holdingProjectileSource() then return false end
+
+		if Mouse.Enabled then
+			if not inputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)
+				and not inputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton2)
+			then
+				return false
+			end
+		end
+
+		if LegitCheck.Enabled and self and not self.isTargeting then
+			return false
+		end
+
+		return true
+	end
+
+	-- ============================================================
+	-- prediction cache
+	-- ============================================================
+
+	local function solveForController(self)
+		if not controller then return end
+		if not entitylib.isAlive then return end
+		if not canRedirect(self) then return end
+
+		local tool = store.hand and store.hand.tool
+		if not tool then return end
+
+		local sourceMeta = itemMeta(tool.Name).projectileSource
+		if Limit.Enabled and not sourceMeta then return end
+
+		local origin
+		local okOrigin, launchPosition = pcall(function()
+			return controller:getLaunchPosition(tool)
+		end)
+
+		if okOrigin and validVector(launchPosition) then
+			origin = launchPosition
+		elseif entitylib.character and entitylib.character.RootPart then
+			origin = entitylib.character.RootPart.Position
+		end
+
+		if not validVector(origin) then return end
+
+		local ent = getTarget(origin)
+		if not ent then
+			currentTarget = nil
+			currentSolution = nil
+			clearBox()
+			return
+		end
+
+		currentTarget = ent
+		lastTargetSeen = os.clock()
+		targetinfo.Targets[ent] = tick() + 0.5
+
+		local speed = nil
+		local gravity = nil
+
+		if sourceMeta and type(sourceMeta.projectileType) == 'function' then
+			local ammo = nil
+
+			if sourceMeta.ammoItemTypes then
+				for _, item in store.inventory.inventory.items do
+					if table.find(sourceMeta.ammoItemTypes, item.itemType) then
+						ammo = item.itemType
+						break
+					end
+				end
+			end
+
+			if ammo then
+				local okProjectile, projectileType = pcall(sourceMeta.projectileType, ammo)
+				if okProjectile and projectileType and bedwars.ProjectileMeta then
+					local projectileMeta = bedwars.ProjectileMeta[projectileType]
+					if projectileMeta then
+						speed = projectileMeta.launchVelocity
+						gravity = projectileMeta.gravitationalAcceleration
+					end
+				end
+			end
+		end
+
+		if not validNumber(speed) or speed <= 0 then
+			local cached = currentSolution
+			if cached and cached.entity == ent and validNumber(cached.speed) then
+				speed = cached.speed
+			else
+				speed = 100
+			end
+		end
+
+		if not validNumber(gravity) then
+			gravity = 196.2
+		end
+
+		local aimPoint, rootPosition = getAimPoint(ent)
+		local velocity = ent.RootPart.AssemblyLinearVelocity
+		local airborne = isAirborne(ent)
+		local hipHeight = getHipHeight(ent)
+		local jump = ent.Jumping and 42.6 or nil
+
+		updateFloorFilter()
+		setPredictionLatency()
+
+		local minimumTime = MinTime.Value > 0 and MinTime.Value or nil
+
+		local aim, impact, travelTime = prediction.SolveTrajectory(
+			origin,
+			speed,
+			gravity,
+			aimPoint,
+			velocity,
+			workspace.Gravity,
+			hipHeight,
+			jump,
+			floorParams,
+			airborne,
+			rootPosition,
+			ent.RootPart,
+			minimumTime,
+			true
+		)
+
+		if not aim then
+			aim, impact, travelTime = prediction.SolveTrajectory(
+				origin,
+				speed,
+				gravity,
+				aimPoint,
+				velocity,
+				workspace.Gravity,
+				hipHeight,
+				jump
+			)
+		end
+
+		if not validVector(aim) then
+			currentSolution = nil
+			clearBox()
+			return
+		end
+
+		local launchVelocity = aim - origin
+		if not validVector(launchVelocity) or launchVelocity.Magnitude <= 0.01 then
+			currentSolution = nil
+			clearBox()
+			return
+		end
+
+		launchVelocity = launchVelocity.Unit * speed
+
+		if MaxTime.Value > 0 and travelTime and travelTime > MaxTime.Value then
+			currentSolution = nil
+			clearBox()
+			return
+		end
+
+		if not trajectoryClear(origin, launchVelocity, gravity, travelTime, ent) then
+			currentSolution = nil
+			clearBox()
+			return
+		end
+
+		currentSolution = {
+			entity = ent,
+			root = ent.RootPart,
+			origin = origin,
+			velocity = launchVelocity,
+			speed = speed,
+			gravity = gravity,
+			travelTime = travelTime,
+			time = os.clock()
+		}
+	end
+
+	local function getCachedVelocity(result, self)
+		if not canRedirect(self) then return nil end
+
+		local solution = currentSolution
+		if not solution then return nil end
+		if os.clock() - solution.time > 0.35 then return nil end
+		if not solution.entity or not entityAlive(solution.entity) then return nil end
+		if solution.root ~= solution.entity.RootPart then return nil end
+		if not baseValidTarget(solution.entity, result.positionFrom) then return nil end
+
+		if (solution.origin - result.positionFrom).Magnitude > 8 then
+			return nil
+		end
+
+		local speed = result.initialVelocity.Magnitude
+		if speed <= 0.01 then return nil end
+
+		if math.abs(speed - solution.speed) > math.max(20, speed * 0.75) then
+			return nil
+		end
+
+		return solution.velocity.Unit * speed
+	end
+
+	-- ============================================================
+	-- hook
+	-- ============================================================
+
+	local function calculate(original, self, handler, preview, tool, positionOverride)
+		local result = original(self, handler, preview, tool, positionOverride)
+
+		if not result then return result end
+		if typeof(result.initialVelocity) ~= 'Vector3' then return result end
+		if typeof(result.positionFrom) ~= 'Vector3' then return result end
+
+		local cachedVelocity = getCachedVelocity(result, self)
+		if cachedVelocity then
+			result.initialVelocity = cachedVelocity
+		end
+
+		return result
+	end
+
+	local function installHook()
+		controller = bedwars.ProjectileController
+
+		if not controller or type(controller.calculateImportantLaunchValues) ~= 'function' then
+			notif('ProjectileAimbot', 'ProjectileController not found', 6, 'alert')
+			ProjectileAimbot:Toggle()
+			return false
+		end
+
+		originalCalc = controller.calculateImportantLaunchValues
+
+		wrapper = function(...)
+			local ok, result = xpcall(calculate, function(err)
+				warnThrottled(err)
+			end, originalCalc, ...)
+
+			if ok and result ~= nil then
+				return result
+			end
+
+			return originalCalc(...)
+		end
+
+		controller.calculateImportantLaunchValues = wrapper
+		hooked = true
+		return true
+	end
+
+	local function removeHook()
+		if hooked and controller and wrapper and controller.calculateImportantLaunchValues == wrapper then
+			controller.calculateImportantLaunchValues = originalCalc
+		end
+
+		hooked = false
+		controller = nil
+		originalCalc = nil
+		wrapper = nil
+	end
+
 	-- ============================================================
 	-- module
 	-- ============================================================
+
 	ProjectileAimbot = vape.Categories.Combat:CreateModule({
 		Name = 'ProjectileAimbot',
 		Function = function(callback)
 			if callback then
-				local ctrl = bedwars.ProjectileController
-				if not (ctrl and type(ctrl.calculateImportantLaunchValues) == 'function') then
-					notif('ProjectileAimbot', 'ProjectileController not found', 6, 'alert')
-					ProjectileAimbot:Toggle()
-					return
+				if not installHook() then return end
+
+				if ShowTarget.Enabled then
+					createBox()
 				end
 
-				-- チェーンフック：オリジナルを直接書き換えず nextCalc 経由で呼ぶ
-				nextCalc = ctrl.calculateImportantLaunchValues
-				wrapper = function(...)
-					local ok, res = xpcall(calculate, function(err)
-						if tick() > (getgenv().PABWarnAt or 0) then
-							getgenv().PABWarnAt = tick() + 5
-							warn('[ProjectileAimbot] ' .. tostring(err))
-						end
-					end, nextCalc, ...)
-					if ok and res ~= nil then return res end
-					return nextCalc(...)
-				end
-				ctrl.calculateImportantLaunchValues = wrapper
-				hooked = true
+				ProjectileAimbot:Clean(runService.Heartbeat:Connect(function()
+					if not ProjectileAimbot.Enabled then return end
+					if predictionBusy then return end
 
-				if ShowTarget.Enabled then createBox() end
+					local now = os.clock()
+					local interval = 1 / math.max(UpdateRate.Value, 1)
 
-				ProjectileAimbot:Clean(runService.RenderStepped:Connect(updateVisuals))
-				ProjectileAimbot:Clean(function()
-					if hooked and bedwars.ProjectileController and bedwars.ProjectileController.calculateImportantLaunchValues == wrapper then
-						bedwars.ProjectileController.calculateImportantLaunchValues = nextCalc
+					if now - lastSolve < interval then
+						updateBox()
+						return
 					end
-					hooked, wrapper, nextCalc = false, nil, nil
-					lastEnt, lastSeen, lastScan = nil, 0, 0
-					if prediction.setLatency then pcall(prediction.setLatency, nil) end
+
+					lastSolve = now
+					predictionBusy = true
+
+					local ok, err = pcall(solveForController, controller)
+					if not ok then
+						warnThrottled(err)
+					end
+
+					predictionBusy = false
+					updateBox()
+				end))
+
+				ProjectileAimbot:Clean(function()
+					removeHook()
+					resetPredictionLatency()
+
+					currentTarget = nil
+					currentSolution = nil
+					lastTargetSeen = 0
+					lastSolve = 0
+					predictionBusy = false
+
 					clearBox()
-					if fovCircle then fovCircle.Visible = false end
 				end)
 			else
-				if box then box:Destroy() box = nil end
-				if fovCircle then pcall(function() fovCircle:Remove() end) fovCircle = nil end
+				removeHook()
+				resetPredictionLatency()
+
+				currentTarget = nil
+				currentSolution = nil
+				lastTargetSeen = 0
+				lastSolve = 0
+				predictionBusy = false
+
+				destroyBox()
 			end
 		end,
-		Tooltip = 'Redirects projectile launches onto predicted target positions.\nHooks calculateImportantLaunchValues so bows, crossbows, snowballs, fireballs and kit projectiles all get corrected.'
+		Tooltip = 'Safe projectile aimbot. Prediction runs on Heartbeat and the launch hook only applies cached velocity.'
 	})
 
-	-- ---------- targeting ----------
-	Targets = ProjectileAimbot:CreateTargets({Players = true, NPCs = true, Walls = false})
+	-- ============================================================
+	-- options
+	-- ============================================================
+
+	Targets = ProjectileAimbot:CreateTargets({
+		Players = true,
+		NPCs = true,
+		Walls = false
+	})
 
 	local methods = {'Distance', 'Mouse'}
-	for i in sortmethods do
-		if not table.find(methods, i) then table.insert(methods, i) end
+	for name in sortmethods do
+		if not table.find(methods, name) then
+			table.insert(methods, name)
+		end
 	end
+
 	Sort = ProjectileAimbot:CreateDropdown({
 		Name = 'Target mode',
 		List = methods,
 		Default = 'Distance',
-		Tooltip = 'Distance - closest to you\nMouse / Cursor - closest to your crosshair\nAngle - closest to where you are facing\nHealth / Damage / Threat / Kit / Forest - combat priority'
+		Tooltip = 'Distance / Mouse / Angle / Health / Damage / Threat / Kit / Cursor / Forest'
 	})
 
 	AimPart = ProjectileAimbot:CreateDropdown({
@@ -5905,115 +6364,172 @@ run(function()
 	})
 
 	Range = ProjectileAimbot:CreateSlider({
-		Name = 'Range', Min = 1, Max = 200, Default = 100,
-		Suffix = function(v) return v == 1 and 'stud' or 'studs' end
+		Name = 'Range',
+		Min = 1,
+		Max = 200,
+		Default = 100,
+		Suffix = function(value)
+			return value == 1 and 'stud' or 'studs'
+		end
 	})
 
 	FOV = ProjectileAimbot:CreateSlider({
-		Name = 'FOV', Min = 1, Max = 360, Default = 90, Suffix = 'degrees',
-		Function = updateVisuals,
-		Tooltip = 'Screen space cone around your crosshair. 360 disables the check'
+		Name = 'FOV',
+		Min = 1,
+		Max = 360,
+		Default = 90,
+		Suffix = 'degrees',
+		Tooltip = 'Screen-space target limit. 360 disables FOV check.'
 	})
 
 	VerticalOffset = ProjectileAimbot:CreateSlider({
-		Name = 'Y offset', Min = -3, Max = 3, Default = 0, Decimal = 10, Suffix = 'studs'
+		Name = 'Y offset',
+		Min = -3,
+		Max = 3,
+		Default = 0,
+		Decimal = 10,
+		Suffix = 'studs'
 	})
 
 	IgnoreWalls = ProjectileAimbot:CreateToggle({
-		Name = 'Ignore behind wall', Default = true,
-		Tooltip = 'Skips targets with a solid block between you and them'
+		Name = 'Ignore behind wall',
+		Default = true,
+		Tooltip = 'Skips targets blocked by terrain.'
 	})
 
 	IgnoreInvis = ProjectileAimbot:CreateToggle({
-		Name = 'Ignore invisible players', Default = true
+		Name = 'Ignore invisible players',
+		Default = true
 	})
 
 	IgnorePlayer = ProjectileAimbot:CreateToggle({
 		Name = 'Ignore player',
-		Function = function(call)
-			if IgnoredList then IgnoredList.Object.Visible = call end
+		Function = function(callback)
+			if IgnoredList and IgnoredList.Object then
+				IgnoredList.Object.Visible = callback
+			end
 		end
 	})
+
 	IgnoredList = ProjectileAimbot:CreateTextList({
-		Name = 'Ignored players', Placeholder = 'PlayerName', Darker = true, Visible = false
+		Name = 'Ignored players',
+		Placeholder = 'PlayerName',
+		Darker = true,
+		Visible = false
 	})
 
 	UseKillauraTarget = ProjectileAimbot:CreateToggle({
 		Name = 'Use killaura target',
-		Tooltip = 'Locks onto whatever Killaura / Silent Aura is currently hitting'
+		Default = false,
+		Tooltip = 'Prioritizes Killaura / Silent Aura target.'
 	})
 
-	-- ---------- conditions ----------
-	Mouse = ProjectileAimbot:CreateToggle({Name = 'Require mouse down'})
-	GUI = ProjectileAimbot:CreateToggle({Name = 'GUI check', Default = true})
-	Limit = ProjectileAimbot:CreateToggle({
-		Name = 'Limit to items', Default = true,
-		Tooltip = 'Only corrects while a projectile source is held'
+	Mouse = ProjectileAimbot:CreateToggle({
+		Name = 'Require mouse down'
 	})
+
+	GUI = ProjectileAimbot:CreateToggle({
+		Name = 'GUI check',
+		Default = true
+	})
+
+	Limit = ProjectileAimbot:CreateToggle({
+		Name = 'Limit to items',
+		Default = true,
+		Tooltip = 'Only redirects while holding a projectile source.'
+	})
+
 	LegitCheck = ProjectileAimbot:CreateToggle({
 		Name = 'Only while drawing',
-		Tooltip = 'Only corrects while the bow / crossbow draw animation is active'
+		Default = false,
+		Tooltip = 'Only redirects while ProjectileController is targeting.'
 	})
+
 	ArcCheck = ProjectileAimbot:CreateToggle({
-		Name = 'Arc check', Default = true,
-		Tooltip = 'Raycasts along the solved arc and drops the shot if terrain blocks it'
+		Name = 'Arc check',
+		Default = false,
+		Tooltip = 'Checks the predicted arc. Off by default for stability.'
 	})
 
-	-- ---------- tuning ----------
 	StickTime = ProjectileAimbot:CreateSlider({
-		Name = 'Target stick', Min = 0, Max = 1, Default = 0.25, Decimal = 100, Suffix = 'seconds',
-		Tooltip = 'Keeps the same target for this long so the aim does not flicker'
-	})
-	UpdateRate = ProjectileAimbot:CreateSlider({
-		Name = 'Update rate', Min = 10, Max = 240, Default = 120, Suffix = 'hz'
-	})
-	LatencyScale = ProjectileAimbot:CreateSlider({
-		Name = 'Latency scale', Min = 0, Max = 2, Default = 1, Decimal = 100,
-		Tooltip = 'Multiplies the ping fed into prediction. Lower it if shots lead too far'
-	})
-	MinTime = ProjectileAimbot:CreateSlider({
-		Name = 'Min travel time', Min = 0, Max = 1, Default = 0, Decimal = 100, Suffix = 'seconds'
-	})
-	MaxTime = ProjectileAimbot:CreateSlider({
-		Name = 'Max travel time', Min = 0, Max = 5, Default = 0, Decimal = 100, Suffix = 'seconds',
-		Tooltip = '0 disables the limit'
+		Name = 'Target stick',
+		Min = 0,
+		Max = 1,
+		Default = 0.25,
+		Decimal = 100,
+		Suffix = 'seconds'
 	})
 
-	-- ---------- render ----------
+	UpdateRate = ProjectileAimbot:CreateSlider({
+		Name = 'Update rate',
+		Min = 5,
+		Max = 60,
+		Default = 30,
+		Suffix = 'hz',
+		Tooltip = 'Prediction refresh rate. Lower this if your executor is unstable.'
+	})
+
+	LatencyScale = ProjectileAimbot:CreateSlider({
+		Name = 'Latency scale',
+		Min = 0,
+		Max = 2,
+		Default = 1,
+		Decimal = 100,
+		Tooltip = 'Ping multiplier used by prediction.'
+	})
+
+	MinTime = ProjectileAimbot:CreateSlider({
+		Name = 'Min travel time',
+		Min = 0,
+		Max = 1,
+		Default = 0,
+		Decimal = 100,
+		Suffix = 'seconds'
+	})
+
+	MaxTime = ProjectileAimbot:CreateSlider({
+		Name = 'Max travel time',
+		Min = 0,
+		Max = 5,
+		Default = 0,
+		Decimal = 100,
+		Suffix = 'seconds',
+		Tooltip = '0 disables the limit.'
+	})
+
 	ShowTarget = ProjectileAimbot:CreateToggle({
-		Name = 'Show target', Default = true,
-		Function = function(call)
-			TargetColor.Object.Visible = call
-			AttackColor.Object.Visible = call
-			if call and ProjectileAimbot.Enabled then
+		Name = 'Show target',
+		Default = true,
+		Function = function(callback)
+			if TargetColor and TargetColor.Object then
+				TargetColor.Object.Visible = callback
+			end
+
+			if AttackColor and AttackColor.Object then
+				AttackColor.Object.Visible = callback
+			end
+
+			if callback and ProjectileAimbot.Enabled then
 				createBox()
 			else
 				clearBox()
 			end
 		end
 	})
+
 	TargetColor = ProjectileAimbot:CreateColorSlider({
-		Name = 'Target color', Darker = true, DefaultHue = 0.6, DefaultOpacity = 0.5, Visible = false
-	})
-	AttackColor = ProjectileAimbot:CreateColorSlider({
-		Name = 'Locked color', Darker = true, DefaultOpacity = 0.5, Visible = false
+		Name = 'Target color',
+		Darker = true,
+		DefaultHue = 0.6,
+		DefaultOpacity = 0.5,
+		Visible = false
 	})
 
-	ShowFOV = ProjectileAimbot:CreateToggle({
-		Name = 'Show FOV',
-		Function = function(call)
-			FOVColor.Object.Visible = call
-			updateVisuals()
-		end
-	})
-	FOVColor = ProjectileAimbot:CreateColorSlider({
-		Name = 'FOV color', Darker = true, DefaultOpacity = 0.5, Visible = false,
-		Function = function(h, s, v, o)
-			if fovCircle then
-				fovCircle.Color = Color3.fromHSV(h, s, v)
-				fovCircle.Transparency = 1 - o
-			end
-		end
+	AttackColor = ProjectileAimbot:CreateColorSlider({
+		Name = 'Locked color',
+		Darker = true,
+		DefaultOpacity = 0.5,
+		Visible = false
 	})
 end)
 
