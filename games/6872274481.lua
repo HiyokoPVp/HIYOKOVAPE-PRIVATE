@@ -5686,9 +5686,16 @@ run(function()
                                 local aim = select(1, solve(origin, 100, 20, part.Position, ent.RootPart.AssemblyLinearVelocity, workspace.Gravity, ent.HipHeight, ent.Jumping and 42.6 or nil, false, ent))
                                 if aim then
                                     pcall(function()
-                                        if type(debug.getstack) ~= 'function' then return old and old(...) end
-						for i, v in debug.getstack(2) do
-                                            if v == dir then debug.setstack(2, i, CFrame.lookAt(origin, aim).LookVector) end
+                                        -- 修正箇所: 'old' を 'oldKick' に修正し、debug.setstack の存在チェックを追加
+                                        if type(debug.getstack) ~= 'function' then 
+                                            return oldKick and oldKick(...) 
+                                        end
+                                        if type(debug.setstack) == 'function' then
+                                            for i, v in debug.getstack(2) do
+                                                if v == dir then 
+                                                    debug.setstack(2, i, CFrame.lookAt(origin, aim).LookVector) 
+                                                end
+                                            end
                                         end
                                     end)
                                     targetinfo.Targets[ent] = tick() + 1
