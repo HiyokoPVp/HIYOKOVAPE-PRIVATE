@@ -25,11 +25,13 @@ local cloneref = cloneref or function(obj)
 end
 
 local function safeGetProto(func, index)
-    if not func then return nil end
-    local success, proto = pcall(debug.getconstant, func, index)
-    if success then
-        return proto
-    end
+	if not func then return nil end
+	-- debug.getconstant が存在しない環境でのクラッシュを防止
+	if not debug or type(debug.getconstant) ~= 'function' then return nil end
+	local success, proto = pcall(debug.getconstant, func, index)
+	if success then
+		return proto
+	end
 end
 
 local inventoryDebounce = false
