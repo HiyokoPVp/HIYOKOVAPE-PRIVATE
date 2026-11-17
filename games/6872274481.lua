@@ -5538,7 +5538,7 @@ run(function()
 end)
 	
 run(function()
-	local TargetPart
+local TargetPart
 local Targets
 local FOV
 local OtherProjectiles
