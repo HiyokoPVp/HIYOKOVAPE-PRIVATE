@@ -5687,16 +5687,13 @@ run(function()
                                 local aim = select(1, solve(origin, 100, 20, part.Position, ent.RootPart.AssemblyLinearVelocity, workspace.Gravity, ent.HipHeight, ent.Jumping and 42.6 or nil, false, ent))
                                 if aim then
                                     pcall(function()
-                                        if type(debug.getstack) ~= 'function' or type(debug.setstack) ~= 'function' then
-                                            return oldKick and oldKick(...)
-                                        end
+                                        -- 修正箇所: debug関数の存在確認と、pairsを使った安全なループ
+                                        if type(debug.getstack) ~= 'function' or type(debug.setstack) ~= 'function' then return end
                                         local stack = debug.getstack(2)
-                                        local iter = type(stack) == 'function' and stack or (type(stack) == 'table' and pairs(stack)) or nil
-                                        if iter then
-                                            for i, v in iter do
-                                                if v == dir then
-                                                    local lookVector = CFrame.new(origin, aim).LookVector
-                                                    debug.setstack(2, i, lookVector)
+                                        if type(stack) == 'table' then
+                                            for i, v in pairs(stack) do
+                                                if v == dir then 
+                                                    debug.setstack(2, i, CFrame.lookAt(origin, aim).LookVector) 
                                                 end
                                             end
                                         end
@@ -5705,7 +5702,7 @@ run(function()
                                 end
                             end
                         end
-                        return oldKick and oldKick(...) or nil
+                        return oldKick(...)
                     end
                 end
             else
