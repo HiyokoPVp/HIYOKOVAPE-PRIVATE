@@ -1499,11 +1499,11 @@ local RemoteHandler = {CachedRemotes = {}}
 		}
 	end
 	
-	if bedwars.ProjectileController and type(bedwars.ProjectileController.calculateImportantLaunchValues) == 'function' then
-		bedwars.ProjectileLaunchHook = createMethodHook(bedwars.ProjectileController, 'calculateImportantLaunchValues')
-	else
-		bedwars.ProjectileLaunchHook = {Add = function() return function() end end, Destroy = function() end}
-	end
+	-- if bedwars.ProjectileController and type(bedwars.ProjectileController.calculateImportantLaunchValues) == 'function' then 
+		-- bedwars.ProjectileLaunchHook = createMethodHook(bedwars.ProjectileController, 'calculateImportantLaunchValues')
+	-- else
+		-- bedwars.ProjectileLaunchHook = {Add = function() return function() end end, Destroy = function() end}
+	-- end
 
 
 	getgenv().bedwars = bedwars
