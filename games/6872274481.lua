@@ -2769,137 +2769,221 @@ run(function()
 end)
 	
 run(function()
-	local Attack
-	local Mine
-	local Place
-	local oldAttackReach, oldMineReach, oldPlaceReach
-	local SwordReach, MineReach
-
+	local Reach
+	local SwordReach, SwordRange
+	local BlockReach, BlockRange
+	local BreakReach, BreakRange
+	local AirHits
+	local RandomGenerator, OldSend, OldGetMouseInfo = Random.new()
+	local SwingConnection
+	
+	-- CATVAPE Logic Ported & canDebug Ignored
 	Reach = vape.Categories.Combat:CreateModule({
-		Name = 'Reach',
+		Name = "Reach",
 		Function = function(callback)
 			if callback then
-				if SwordReach and SwordReach.Enabled then
-					oldAttackReach = bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE
-					bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = Attack.Value + 2
-				end
-				
-				task.spawn(function()
-					repeat task.wait(0.1) until bedwars.BlockBreakController or not Reach.Enabled
-					if not Reach.Enabled or not MineReach or not MineReach.Enabled then return end
-					
-					pcall(function()
-						local blockBreaker = bedwars.BlockBreakController:getBlockBreaker()
-						if blockBreaker then
-							oldMineReach = oldMineReach or blockBreaker:getRange()
-							blockBreaker:setRange(Mine.Value)
-						end
-					end)
-				end)
-				
-				local _reachLoopThread = task.spawn(function()
-					while Reach.Enabled do
-						task.wait(5)
-						if not Reach.Enabled then break end
-						if SwordReach.Enabled and bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE ~= Attack.Value + 2 then
-							bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = Attack.Value + 2
-						end
-						if MineReach.Enabled then
-							pcall(function()
-								local blockBreaker = bedwars.BlockBreakController:getBlockBreaker()
-								if blockBreaker and blockBreaker:getRange() ~= Mine.Value then
-									blockBreaker:setRange(Mine.Value)
-								end
-							end)
-						end
-					end
-				end)
-				Reach:Clean(function()
-					if _reachLoopThread then
-						pcall(task.cancel, _reachLoopThread)
-						_reachLoopThread = nil
-					end
-				end)
-			else
-				if oldAttackReach then
-					bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = oldAttackReach
-				end
-				
-				if oldMineReach then
-					pcall(function()
-						local blockBreaker = bedwars.BlockBreakController:getBlockBreaker()
-						if blockBreaker then
-							blockBreaker:setRange(oldMineReach)
-						end
-					end)
+				-- 1. Sword Reach Setup
+				if SwordReach.Enabled then
+					bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = SwordRange.Value + 2
 				end
 
-				oldAttackReach, oldMineReach = nil, nil
+				-- 2. Block/Break Reach Setup (Always Active Hook)
+				OldGetMouseInfo = bedwars.BlockSelector.getMouseInfo
+				bedwars.BlockSelector.getMouseInfo = function(self, mode, args)
+					args = args or {}
+					if mode == 0 then -- Placement
+						if BlockReach.Enabled then
+							args.range = BlockRange.Value
+						end
+					elseif mode == 1 then -- Breaking
+						if BreakReach.Enabled then
+							args.range = BreakRange.Value
+						end
+					end
+					return OldGetMouseInfo(self, mode, args)
+				end
+
+				-- 3. Extended Sword Hit Logic (Packet Manipulation)
+				OldSend = bedwars.SwordController.sendServerRequest
+				bedwars.SwordController.sendServerRequest = function(self, ent, ...)
+					local char = ent and ent:getInstance()
+					local hum = char and char:FindFirstChildWhichIsA("Humanoid")
+					
+					-- Check if target is out of normal reach but within extended reach
+					if char and char.PrimaryPart and entitylib.isAlive then
+						local dist = (char.PrimaryPart.Position - entitylib.character.RootPart.Position).Magnitude
+						local currentReach = SwordReach.Enabled and (SwordRange.Value + 2) or 14.4
+						
+						-- If distance > vanilla reach (approx 8-10) AND (Target is in air OR AirHit chance passes)
+						local isAir = (hum and hum.FloorMaterial == Enum.Material.Air) or math.abs(char.PrimaryPart.AssemblyLinearVelocity.Y) > 0.01
+						local shouldExtend = dist > 10 and dist <= currentReach
+						
+						if shouldExtend and (not isAir or RandomGenerator:NextNumber(0, 100) <= AirHits:GetRandomValue()) then
+							-- We let the original function handle it, but we might need to spoof validation if strict
+							-- For this port, we rely on the CombatConstant change + ClientSide validation bypass
+						end
+					end
+					return OldSend(self, ent, ...)
+				end
+
+				-- 4. Input Listener for Extended Swings (Visual/Packet sync)
+				SwingConnection = UserInputService.InputBegan:Connect(function(input, processed)
+					if processed then return end
+					if input.UserInputType ~= Enum.UserInputType.MouseButton1 and input.UserInputType ~= Enum.UserInputType.Touch then return end
+					
+					if not entitylib.isAlive or not SwordReach.Enabled then return end
+					
+					local sword = store.tools.sword
+					if not sword then return end
+					
+					-- Simple cooldown check based on sword speed
+					local speed = store.swordSpeeds and store.swordSpeeds[sword.itemType] or 0.3
+					if (tick() - bedwars.SwordController.lastAttack) < speed then return end
+
+					local localPos = entitylib.character.RootPart.Position
+					local target = entitylib.EntityPosition({
+						Origin = localPos,
+						Range = SwordRange.Value + 2,
+						Part = "RootPart",
+						Players = true,
+						NPCs = true,
+						Wallcheck = true
+					})
+
+					if target then
+						local delta = target.RootPart.Position - localPos
+						local reach = SwordRange.Value + 2
+						
+						-- Only extend if actually needed (beyond normal server check)
+						if delta.Magnitude > 10 and delta.Magnitude <= reach then
+							local isAir = (target.Humanoid and target.Humanoid.FloorMaterial == Enum.Material.Air) or math.abs(target.RootPart.AssemblyLinearVelocity.Y) > 0.01
+							if not isAir or RandomGenerator:NextNumber(0, 100) <= AirHits:GetRandomValue() then
+								local dir = CFrame.lookAt(localPos, target.RootPart.Position).LookVector
+								bedwars.SwordController.lastAttack = workspace:GetServerTimeNow()
+								
+								-- Send extended attack packet manually
+								bedwars.Client:Get(remotes.AttackEntity):SendToServer({
+									weapon = sword.tool,
+									chargedAttack = {chargeRatio = 0},
+									entityInstance = target.Character,
+									validate = {
+										raycast = {
+											cameraPosition = {value = gameCamera.CFrame.Position},
+											cursorDirection = {value = dir}
+										},
+										targetPosition = {value = target.Character:GetPivot().Position},
+										selfPosition = {value = localPos + dir * math.max(delta.Magnitude - (reach - 0.001), 0)}
+									}
+								})
+							end
+						end
+					end
+				end)
+
+			else
+				-- Cleanup / Restore
+				bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = 14.4
+				
+				if OldGetMouseInfo then
+					bedwars.BlockSelector.getMouseInfo = OldGetMouseInfo
+					OldGetMouseInfo = nil
+				end
+				
+				if OldSend then
+					bedwars.SwordController.sendServerRequest = OldSend
+					OldSend = nil
+				end
+
+				if SwingConnection then
+					SwingConnection:Disconnect()
+					SwingConnection = nil
+				end
 			end
 		end,
-		Tooltip = 'Extends reach for attacking, mining, and placing blocks'
+		Tooltip = "Extends reach for attacking, mining, and placing blocks"
 	})
-	
+
+	-- UI Options
 	SwordReach = Reach:CreateToggle({
-		Name = 'Sword Reach',
+		Name = "Sword Reach",
 		Default = true,
 		Function = function(v)
-			if Attack then Attack.Object.Visible = v end
+			if SwordRange then SwordRange.Object.Visible = v end
+			if AirHits then AirHits.Object.Visible = v end
 			if Reach.Enabled then
-				if v then
-					bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = Attack.Value + 2
-				else
-					bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = oldAttackReach or 14.4
-				end
+				bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = v and (SwordRange.Value + 2) or 14.4
 			end
 		end
 	})
 
-	Attack = Reach:CreateSlider({
-		Name = 'Attack Range',
-		Darker = true,
-		Visible = true,
-		Min = 0,
-		Max = 20,
+	SwordRange = Reach:CreateSlider({
+		Name = "Sword Range",
+		Min = 1,
+		Max = 18,
 		Default = 18,
+		Decimal = 5,
+		Darker = true,
+		Suffix = function(val) return val == 1 and "stud" or "studs" end,
 		Function = function(val)
-			if Reach.Enabled then
+			if Reach.Enabled and SwordReach.Enabled then
 				bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE = val + 2
 			end
-		end,
-		Suffix = function(val)
-			return val == 1 and 'stud' or 'studs'
-		end
-	})
-	
-	MineReach = Reach:CreateToggle({
-		Name = 'Mine Reach',
-		Default = false,
-		Function = function(v)
-			if Mine then Mine.Object.Visible = v end
 		end
 	})
 
-	Mine = Reach:CreateSlider({
-		Name = 'Mine Range',
+	AirHits = Reach:CreateTwoSlider({
+		Name = "Air hit chance",
+		Min = 0,
+		Max = 100,
+		DefaultMin = 100,
+		DefaultMax = 100,
+		Darker = true,
+		Tooltip = "Chance for a hit past normal reach to land while the target is off the ground"
+	})
+
+	BlockReach = Reach:CreateToggle({
+		Name = "Placement Reach",
+		Function = function(v)
+			if BlockRange then BlockRange.Object.Visible = v end
+		end
+	})
+
+	BlockRange = Reach:CreateSlider({
+		Name = "Placement Range",
+		Min = 1,
+		Max = 60,
+		Default = 24, -- Bedwars default is often higher for placement
 		Darker = true,
 		Visible = false,
-		Min = 0,
+		Suffix = function(val) return val == 1 and "stud" or "studs" end
+	})
+
+	BreakReach = Reach:CreateToggle({
+		Name = "Break Reach",
+		Function = function(v)
+			if BreakRange then BreakRange.Object.Visible = v end
+		end
+	})
+
+	BreakRange = Reach:CreateSlider({
+		Name = "Break Range",
+		Min = 1,
 		Max = 30,
 		Default = 18,
-		Function = function(val)
-			if Reach.Enabled then
-				pcall(function()
-					local blockBreaker = bedwars.BlockBreakController:getBlockBreaker()
-					if blockBreaker then
-						blockBreaker:setRange(val)
-					end
-				end)
-			end
+		Decimal = 5,
+		Darker = true,
+		Visible = false,
+		Suffix = function(val) return val == 1 and "stud" or "studs" end
+	})
+
+	Reach:CreateButton({
+		Name = "Reset to default reach",
+		Function = function()
+			BreakRange:SetValue(18)
+			BlockRange:SetValue(24)
+			SwordRange:SetValue(8) -- Vanilla is roughly 8-10 studs depending on weapon
 		end,
-		Suffix = function(val)
-			return val == 1 and 'stud' or 'studs'
-		end
+		Tooltip = "Resets every range back to default"
 	})
 end)
 	
