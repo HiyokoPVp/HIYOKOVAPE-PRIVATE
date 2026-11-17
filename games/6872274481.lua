@@ -5467,105 +5467,145 @@ run(function()
 end)
 	
 run(function()
-local TargetPart
-local Targets
-local FOV
-local OtherProjectiles
-local rayCheck = RaycastParams.new()
-rayCheck.FilterType = Enum.RaycastFilterType.Include
-rayCheck.FilterDescendantsInstances = {workspace:FindFirstChild('Map')}
-local old
+	local TargetPart, Targets, FOV, OtherProjectiles
+	local old
+	local rayCheck = RaycastParams.new()
+	rayCheck.FilterType = Enum.RaycastFilterType.Include
 
-local ProjectileAimbot = vape.Categories.Blatant:CreateModule({
-	Name = 'ProjectileAimbot',
-	Function = function(callback)
-		if callback then
-			old = bedwars.ProjectileController.calculateImportantLaunchValues
-			bedwars.ProjectileController.calculateImportantLaunchValues = function(...)
-				local self, projmeta, worldmeta, origin, shootpos = ...
-				local plr = entitylib.EntityMouse({
-					Part = 'RootPart',
-					Range = FOV.Value,
-					Players = Targets.Players.Enabled,
-					NPCs = Targets.NPCs.Enabled,
-					Wallcheck = Targets.Walls.Enabled,
-					Origin = entitylib.isAlive and (shootpos or entitylib.character.RootPart.Position) or Vector3.zero
-				})
+	-- Map は毎回取り直す（ロビー inject / マップ再生成対策）
+	local function refreshFilter()
+		local map = workspace:FindFirstChild('Map')
+		if map then
+			rayCheck.FilterDescendantsInstances = {map}
+			return true
+		end
+		rayCheck.FilterDescendantsInstances = {}
+		return false
+	end
 
-				if plr then
-					local pos = shootpos or self:getLaunchPosition(origin)
-					if not pos then
-						return old(...)
-					end
+	-- BowConstants 実値フォールバック（SRC u250 より）
+	local function bowConst()
+		local bc = bedwars.BowConstantsTable
+		if type(bc) == 'table' and bc.RelX then return bc end
+		return {RelX = 0.8, RelY = -0.6, RelZ = 0}
+	end
 
-					if (not OtherProjectiles.Enabled) and not projmeta.projectile:find('arrow') then
-						return old(...)
-					end
+	local function hasSolver()
+		return type(prediction) == 'table' and type(prediction.SolveTrajectory) == 'function'
+	end
 
-					local meta = projmeta:getProjectileMeta()
-					local lifetime = (worldmeta and meta.predictionLifetimeSec or meta.lifetimeSec or 3)
-					local gravity = (meta.gravitationalAcceleration or 196.2) * projmeta.gravityMultiplier
-					local projSpeed = (meta.launchVelocity or 100)
-					local offsetpos = pos + (projmeta.projectile == 'owl_projectile' and Vector3.zero or projmeta.fromPositionOffset)
-					local balloons = plr.Character:GetAttribute('InflatedBalloons')
-					local playerGravity = workspace.Gravity
+	local ProjectileAimbot = vape.Categories.Blatant:CreateModule({
+		Name = 'ProjectileAimbot',
+		Function = function(callback)
+			if callback then
+				if not hasSolver() then
+					notif('ProjectileAimbot', 'prediction.SolveTrajectory missing', 8, 'alert')
+					ProjectileAimbot:Toggle()
+					return
+				end
 
-					if balloons and balloons > 0 then
-						playerGravity = (workspace.Gravity * (1 - ((balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))))
-					end
+				old = bedwars.ProjectileController.calculateImportantLaunchValues
+				bedwars.ProjectileController.calculateImportantLaunchValues = function(self, projmeta, worldmeta, origin, shootpos)
+					-- 何が来ても元関数に落とす。Promise reject を絶対に起こさない
+					local ok, res = pcall(function()
+						if not projmeta then return old(self, projmeta, worldmeta, origin, shootpos) end
 
-					if plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
-						playerGravity = 6
-					end
+						local pos = shootpos or self:getLaunchPosition(origin)
+						if not pos then return old(self, projmeta, worldmeta, origin, shootpos) end
 
-					if plr.Player:GetAttribute('IsOwlTarget') then
-						for _, owl in collectionService:GetTagged('Owl') do
-							if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
-								playerGravity = 0
+						local meta = projmeta.getProjectileMeta and projmeta:getProjectileMeta()
+						if not meta then return old(self, projmeta, worldmeta, origin, shootpos) end
+
+						-- projectile 名は関数から取る。フィールドは信用しない
+						local projName = ''
+						if type(projmeta.projectileType) == 'function' then
+							local okp, n = pcall(projmeta.projectileType, 'arrow')
+							projName = okp and tostring(n) or ''
+						elseif type(projmeta.projectile) == 'string' then
+							projName = projmeta.projectile
+						end
+
+						if not OtherProjectiles.Enabled and not projName:find('arrow') then
+							return old(self, projmeta, worldmeta, origin, shootpos)
+						end
+
+						local plr = entitylib.EntityMouse({
+							Part = 'RootPart',
+							Range = FOV.Value,
+							Players = Targets.Players.Enabled,
+							NPCs = Targets.NPCs.Enabled,
+							Wallcheck = Targets.Walls.Enabled,
+							Origin = pos
+						})
+						if not plr or not plr.Character or not plr.RootPart then
+							return old(self, projmeta, worldmeta, origin, shootpos)
+						end
+
+						local aimPart = plr[TargetPart.Value] or plr.RootPart
+						if not aimPart then return old(self, projmeta, worldmeta, origin, shootpos) end
+
+						local lifetime = meta.predictionLifetimeSec or meta.lifetimeSec or 3
+						local gravity = (meta.gravitationalAcceleration or 196.2) * (projmeta.gravityMultiplier or 1)
+						local projSpeed = (meta.launchVelocity or 100) * (projmeta.velocityMultiplier or 1)
+						local offsetpos = pos + (projName == 'owl_projectile' and Vector3.zero or (projmeta.fromPositionOffset or Vector3.zero))
+
+						local playerGravity = workspace.Gravity
+						local balloons = plr.Character:GetAttribute('InflatedBalloons')
+						if balloons and balloons > 0 then
+							playerGravity = workspace.Gravity * (1 - (balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))
+						end
+						if plr.Character.PrimaryPart and plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
+							playerGravity = 6
+						end
+
+						-- NPC は Player が nil。ここが元のクラッシュ地点
+						if plr.Player and plr.Player:GetAttribute('IsOwlTarget') then
+							for _, owl in collectionService:GetTagged('Owl') do
+								if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
+									playerGravity = 0
+								end
 							end
 						end
-					end
 
-					local newlook = CFrame.new(offsetpos, plr[TargetPart.Value].Position) * CFrame.new(projmeta.projectile == 'owl_projectile' and Vector3.zero or Vector3.new(bedwars.BowConstantsTable.RelX, bedwars.BowConstantsTable.RelY, bedwars.BowConstantsTable.RelZ))
-					local calc = prediction.SolveTrajectory(newlook.p, projSpeed, gravity, plr[TargetPart.Value].Position, projmeta.projectile == 'telepearl' and Vector3.zero or plr[TargetPart.Value].Velocity, playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck)
-					if calc then
+						local bc = bowConst()
+						local rel = projName == 'owl_projectile' and Vector3.zero or Vector3.new(bc.RelX, bc.RelY, bc.RelZ)
+						local newlook = CFrame.new(offsetpos, aimPart.Position) * CFrame.new(rel)
+
+						refreshFilter()
+						local calc = prediction.SolveTrajectory(
+							newlook.p, projSpeed, gravity, aimPart.Position,
+							projName == 'telepearl' and Vector3.zero or aimPart.AssemblyLinearVelocity,
+							playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck
+						)
+						if not calc then return old(self, projmeta, worldmeta, origin, shootpos) end
+
 						targetinfo.Targets[plr] = os.clock() + 1
 						return {
 							initialVelocity = CFrame.new(newlook.Position, calc).LookVector * projSpeed,
 							positionFrom = offsetpos,
 							deltaT = lifetime,
 							gravitationalAcceleration = gravity,
-							drawDurationSeconds = 5
+							drawDurationSeconds = projmeta.drawDurationSeconds or meta.maxStrengthChargeSec or 1
 						}
-					end
-				end
+					end)
 
-				return old(...)
+					if ok then return res end
+					return old(self, projmeta, worldmeta, origin, shootpos)
+				end
+			else
+				if old then
+					bedwars.ProjectileController.calculateImportantLaunchValues = old
+					old = nil
+				end
 			end
-		else
-			bedwars.ProjectileController.calculateImportantLaunchValues = old
-		end
-	end,
-	Tooltip = 'Silently adjusts your aim towards the enemy'
-})
-Targets = ProjectileAimbot:CreateTargets({
-	Players = true,
-	Walls = true
-})
-TargetPart = ProjectileAimbot:CreateDropdown({
-	Name = 'Part',
-	List = {'RootPart', 'Head'}
-})
-FOV = ProjectileAimbot:CreateSlider({
-	Name = 'FOV',
-	Min = 1,
-	Max = 1000,
-	Default = 1000
-})
-OtherProjectiles = ProjectileAimbot:CreateToggle({
-	Name = 'Other Projectiles',
-	Default = true
-})
+		end,
+		Tooltip = 'Silently adjusts your aim towards the enemy'
+	})
+
+	Targets = ProjectileAimbot:CreateTargets({Players = true, Walls = true})
+	TargetPart = ProjectileAimbot:CreateDropdown({Name = 'Part', List = {'RootPart', 'Head'}})
+	FOV = ProjectileAimbot:CreateSlider({Name = 'FOV', Min = 1, Max = 1000, Default = 1000})
+	OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true})
 end)
 
 run(function()
