@@ -2,6 +2,8 @@ print("maybe fixed nametag ig")
 print("saku loVe yuzu")
 -- hiyokovape on top
 
+print("9tz and yuzu dating")
+
 local _runWarnAt = 0
 local run = function(func)
 	task.wait()
