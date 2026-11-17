@@ -1,9 +1,10 @@
 --[[
-	Prediction Library
+	Prediction Library (Modified for ProjectileAimbot)
 	Source: https://devforum.roblox.com/t/predict-projectile-ballistics-including-gravity-and-motion/1842434
 ]]
 local module = {}
 local eps = 1e-9
+
 local function isZero(d)
 	return (d > -eps and d < eps)
 end
@@ -14,7 +15,6 @@ end
 
 local function solveQuadric(c0, c1, c2)
 	local s0, s1
-
 	local p, q, D
 
 	p = c1 / (2 * c0)
@@ -26,9 +26,8 @@ local function solveQuadric(c0, c1, c2)
 		return s0
 	elseif (D < 0) then
 		return
-	else -- if (D > 0)
+	else
 		local sqrt_D = math.sqrt(D)
-
 		s0 = sqrt_D - p
 		s1 = -sqrt_D - p
 		return s0, s1
@@ -37,7 +36,6 @@ end
 
 local function solveCubic(c0, c1, c2, c3)
 	local s0, s1, s2
-
 	local num, sub
 	local A, B, C
 	local sq_A, p, q
@@ -55,16 +53,16 @@ local function solveCubic(c0, c1, c2, c3)
 	D = q * q + cb_p
 
 	if isZero(D) then
-		if isZero(q) then -- one triple solution
+		if isZero(q) then
 			s0 = 0
 			num = 1
-		else -- one single and one double solution
+		else
 			local u = cuberoot(-q)
 			s0 = 2 * u
 			s1 = -u
 			num = 2
 		end
-	elseif (D < 0) then -- Casus irreducibilis: three real solutions
+	elseif (D < 0) then
 		local phi = (1 / 3) * math.acos(-q / math.sqrt(-cb_p))
 		local t = 2 * math.sqrt(-p)
 
@@ -72,7 +70,7 @@ local function solveCubic(c0, c1, c2, c3)
 		s1 = -t * math.cos(phi + math.pi / 3)
 		s2 = -t * math.cos(phi - math.pi / 3)
 		num = 3
-	else -- one real solution
+	else
 		local sqrt_D = math.sqrt(D)
 		local u = cuberoot(sqrt_D - q)
 		local v = -cuberoot(sqrt_D + q)
@@ -92,7 +90,6 @@ end
 
 function module.solveQuartic(c0, c1, c2, c3, c4)
 	local s0, s1, s2, s3
-
 	local coeffs = {}
 	local z, u, v, sub
 	local A, B, C, D
@@ -186,22 +183,21 @@ function module.solveQuartic(c0, c1, c2, c3, c4)
 	return {s3, s2, s1, s0}
 end
 
-function module.SolveTrajectory(origin, projectileSpeed, gravity, targetPos, targetVelocity, playerGravity, playerHeight, playerJump, params)
+-- 拡張された SolveTrajectory（ProjectileAimbot側からのすべての引数に対応）
+function module.SolveTrajectory(origin, projectileSpeed, gravity, targetPos, targetVelocity, playerGravity, playerHeight, playerJump, params, airborne, targetRootPos, targetRootPart, ...)
 	local disp = targetPos - origin
 	local p, q, r = targetVelocity.X, targetVelocity.Y, targetVelocity.Z
 	local h, j, k = disp.X, disp.Y, disp.Z
 	local l = -.5 * gravity
-	--attemped gravity calculation, may return to it in the future.
+
 	if math.abs(q) > 0.01 and playerGravity and playerGravity > 0 then
 		local estTime = (disp.Magnitude / projectileSpeed)
-		local origq = q
-		local origj = j
 		for i = 1, 100 do
 			q -= (.5 * playerGravity) * estTime
 			local velo = targetVelocity * 0.016
-			local ray = workspace.Raycast(workspace, Vector3.new(targetPos.X, targetPos.Y, targetPos.Z), Vector3.new(velo.X, (q * estTime) - playerHeight, velo.Z), params)
+			local ray = workspace.Raycast(workspace, Vector3.new(targetPos.X, targetPos.Y, targetPos.Z), Vector3.new(velo.X, (q * estTime) - (playerHeight or 3), velo.Z), params)
 			if ray then
-				local newTarget = ray.Position + Vector3.new(0, playerHeight, 0)
+				local newTarget = ray.Position + Vector3.new(0, playerHeight or 3, 0)
 				estTime -= math.sqrt(((targetPos - newTarget).Magnitude * 2) / playerGravity)
 				targetPos = newTarget
 				j = (targetPos - origin).Y
@@ -214,34 +210,64 @@ function module.SolveTrajectory(origin, projectileSpeed, gravity, targetPos, tar
 	end
 
 	local solutions = module.solveQuartic(
-		l*l,
-		-2*q*l,
-		q*q - 2*j*l - projectileSpeed*projectileSpeed + p*p + r*r,
-		2*j*q + 2*h*p + 2*k*r,
-		j*j + h*h + k*k
+		l * l,
+		-2 * q * l,
+		q * q - 2 * j * l - projectileSpeed * projectileSpeed + p * p + r * r,
+		2 * j * q + 2 * h * p + 2 * k * r,
+		j * j + h * h + k * k
 	)
+	
+	local travelTime = nil
 	if solutions then
-		local posRoots = table.create(2)
-		for _, v in solutions do --filter out the negative roots
+		local posRoots = {}
+		for _, v in solutions do
 			if v > 0 then
 				table.insert(posRoots, v)
 			end
 		end
-		posRoots[1] = posRoots[1]
+		table.sort(posRoots)
 		if posRoots[1] then
-			local t = posRoots[1]
-			local d = (h + p*t)/t
-			local e = (j + q*t - l*t*t)/t
-			local f = (k + r*t)/t
-			return origin + Vector3.new(d, e, f)
+			travelTime = posRoots[1]
+			local t = travelTime
+			local d = (h + p * t) / t
+			local e = (j + q * t - l * t * t) / t
+			local f = (k + r * t) / t
+			-- AimPosition, nil (2番目は捨てられる), TravelTime を返す
+			return origin + Vector3.new(d, e, f), nil, travelTime
 		end
-	elseif gravity == 0 then
-		local t = (disp.Magnitude / projectileSpeed)
-		local d = (h + p*t)/t
-		local e = (j + q*t - l*t*t)/t
-		local f = (k + r*t)/t
-		return origin + Vector3.new(d, e, f)
 	end
+	
+	if gravity == 0 or not travelTime then
+		local t = (disp.Magnitude / projectileSpeed)
+		if t > 0 then
+			local d = (h + p * t) / t
+			local e = (j + q * t - l * t * t) / t
+			local f = (k + r * t) / t
+			return origin + Vector3.new(d, e, f), nil, t
+		end
+	end
+
+	return nil, nil, nil
+end
+
+-- ProjectileAimbotの Walls チェックで使われる判定関数を追加
+function module.IsTrajectoryClear(origin, launchVelocity, gravity, travelTime, params)
+	local steps = math.clamp(math.floor(travelTime * 20), 5, 40)
+	local dt = travelTime / steps
+	local currentPos = origin
+	local currentVel = launchVelocity
+	
+	for i = 1, steps do
+		local nextPos = currentPos + currentVel * dt + 0.5 * Vector3.new(0, -gravity, 0) * dt * dt
+		local raycastResult = workspace:Raycast(currentPos, nextPos - currentPos, params)
+		if raycastResult then
+			return false
+		end
+		currentPos = nextPos
+		currentVel = currentVel + Vector3.new(0, -gravity, 0) * dt
+	end
+	
+	return true
 end
 
 return module
