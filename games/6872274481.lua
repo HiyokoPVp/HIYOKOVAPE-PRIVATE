@@ -16744,3 +16744,364 @@ run(function()
 end)
 
 print("is that roblox yuzu")
+
+-- ============================================================
+-- FalseBan : クライアントサイド演出のみ（サーバーには何も送らない）
+--   選択したプレイヤーが Fly / SpinBot / Animation しているように"見える"
+-- ============================================================
+run(function()
+	local FalseBan
+	local PlayerList, Method
+	local FlyHeight, FlySpeed, FlyBob
+	local SpinSpeed, SpinTilt
+	local AnimMode, AnimSpeed
+	local Teammates, NotifyOnStart
+
+	local active = false
+	local selectedName = nil
+	local conns = {}
+	local parts = {}          -- {[BasePart] = {C0 = ..., Trans = ...}}
+	local motors = {}         -- {[Motor6D] = C0}
+	local tracks = {}         -- 再生中の AnimationTrack
+	local animatorCache = {}  -- {[Humanoid] = Animator}
+	local targetChar, targetRoot, targetHum
+	local baseY, phase, spinAngle = nil, 0, 0
+	local lastAnimId, animThread = nil, nil
+
+	-- 見た目だけ変えるので、物理が暴れないよう毎フレーム Anchored を維持
+	local function isVisualPart(v)
+		return v:IsA('BasePart') and v.Name ~= 'HumanoidRootPart'
+	end
+
+	local function snapshot(char)
+		for _, v in char:GetDescendants() do
+			if isVisualPart(v) and not parts[v] then
+				parts[v] = {CFrame = v.CFrame, Transparency = v.Transparency}
+				v.Anchored = true
+			elseif v:IsA('Motor6D') and not motors[v] then
+				motors[v] = v.C0
+			end
+		end
+	end
+
+	local function restoreAll()
+		for part, data in parts do
+			pcall(function()
+				if part.Parent then
+					part.Anchored = false
+					part.CFrame = data.CFrame
+					part.Transparency = data.Transparency
+				end
+			end)
+		end
+		for motor, c0 in motors do
+			pcall(function() if motor.Parent then motor.C0 = c0 end end)
+		end
+		for _, track in tracks do
+			pcall(function() track:Stop(0.15) end)
+		end
+		table.clear(parts)
+		table.clear(motors)
+		table.clear(tracks)
+		table.clear(animatorCache)
+	end
+
+	local function disconnectAll()
+		for _, c in conns do pcall(function() c:Disconnect() end) end
+		table.clear(conns)
+	end
+
+	-- ---------- プレイヤーリスト ----------
+	local function playerNames()
+		local list = {}
+		for _, v in playersService:GetPlayers() do
+			if v ~= lplr then table.insert(list, v.Name) end
+		end
+		table.sort(list)
+		return list
+	end
+
+	local function refreshList()
+		if not PlayerList then return end
+		local names = playerNames()
+		pcall(function() PlayerList.List = names end)
+		if selectedName and not table.find(names, selectedName) then
+			selectedName = nil
+		end
+		if not selectedName and #names > 0 then
+			selectedName = names[1]
+			pcall(function() PlayerList.Value = selectedName end)
+		end
+	end
+
+	local function getTargetPlayer()
+		if not selectedName then return nil end
+		return playersService:GetPlayerByName(selectedName)
+	end
+
+	-- ---------- Fly ----------
+	local function flyStep(dt)
+		if not (targetRoot and targetRoot.Parent) then return end
+		if not baseY then baseY = targetRoot.Position.Y end
+		phase += dt * FlySpeed.Value
+		spinAngle += dt * 0.6
+
+		local goal = Vector3.new(
+			targetRoot.Position.X,
+			baseY + FlyHeight.Value + math.sin(phase) * FlyBob.Value,
+			targetRoot.Position.Z
+		)
+		local cf = CFrame.new(goal) * CFrame.Angles(
+			math.rad(math.sin(phase * 0.7) * 6),
+			spinAngle,
+			math.rad(math.cos(phase * 0.5) * 6)
+		)
+
+		-- RootPart は触らず、見た目パーツだけオフセットして浮かせる
+		local delta = cf * targetRoot.CFrame:Inverse()
+		for part, data in parts do
+			if part.Parent then
+				part.Anchored = true
+				part.CFrame = delta * data.CFrame
+			end
+		end
+	end
+
+	-- ---------- SpinBot ----------
+	local function spinStep(dt)
+		if not (targetRoot and targetRoot.Parent) then return end
+		spinAngle += math.rad(SpinSpeed.Value) * dt
+		local tilt = math.rad(SpinTilt.Value)
+		local cf = targetRoot.CFrame * CFrame.Angles(tilt, spinAngle, 0)
+		local delta = cf * targetRoot.CFrame:Inverse()
+		for part, data in parts do
+			if part.Parent then
+				part.Anchored = true
+				part.CFrame = delta * data.CFrame
+			end
+		end
+	end
+
+	-- ---------- Animation ----------
+	-- id は Roblox 標準アニメーション。好きな ID に差し替えてOK
+	local ANIM_IDS = {
+		Cheer   = 'rbxassetid://507770677',
+		Wave    = 'rbxassetid://507770239',
+		Point   = 'rbxassetid://507770453',
+		Dance   = 'rbxassetid://507771019',
+		Dance2  = 'rbxassetid://507776043',
+		Dance3  = 'rbxassetid://507777268',
+		Laugh   = 'rbxassetid://507770818',
+		Zombie  = 'rbxassetid://616158929',
+		Ninja   = 'rbxassetid://656117400',
+		Robot   = 'rbxassetid://616088211',
+		Toy     = 'rbxassetid://616136790',
+		Knight  = 'rbxassetid://657595757',
+		Astronaut = 'rbxassetid://891621366',
+	}
+	local animNames = {}
+	for i in ANIM_IDS do table.insert(animNames, i) end
+	table.sort(animNames)
+
+	local function getAnimator(hum)
+		if not hum then return nil end
+		local cached = animatorCache[hum]
+		if cached and cached.Parent then return cached end
+		local animator = hum:FindFirstChildOfClass('Animator')
+		if not animator then
+			animator = Instance.new('Animator')
+			animator.Parent = hum
+		end
+		animatorCache[hum] = animator
+		return animator
+	end
+
+	local function playAnim(id)
+		local animator = getAnimator(targetHum)
+		if not animator then return end
+		for _, track in tracks do pcall(function() track:Stop(0.15) end) end
+		table.clear(tracks)
+		local anim = Instance.new('Animation')
+		anim.AnimationId = id
+		local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+		anim:Destroy()
+		if not ok or not track then return end
+		track.Priority = Enum.AnimationPriority.Action4
+		track.Looped = true
+		track:Play(0.15)
+		track:AdjustSpeed(AnimSpeed.Value)
+		table.insert(tracks, track)
+	end
+
+	local function animationStart()
+		lastAnimId = nil
+		animThread = task.spawn(function()
+			while active and Method.Value == 'Animation' do
+				if targetHum and targetHum.Parent then
+					local id
+					if AnimMode.Value == 'Random' then
+						id = ANIM_IDS[animNames[math.random(1, #animNames)]]
+					else
+						id = ANIM_IDS[AnimMode.Value]
+					end
+					if id and id ~= lastAnimId then
+						lastAnimId = id
+						playAnim(id)
+					end
+					for _, track in tracks do
+						pcall(function() track:AdjustSpeed(AnimSpeed.Value) end)
+					end
+				end
+				task.wait(AnimMode.Value == 'Random' and 3 or 0.25)
+			end
+		end)
+	end
+
+	-- ---------- 起動 / 停止 ----------
+	local function stopVisuals()
+		active = false
+		disconnectAll()
+		if animThread then pcall(task.cancel, animThread) animThread = nil end
+		restoreAll()
+		targetChar, targetRoot, targetHum = nil, nil, nil
+		baseY, phase, spinAngle, lastAnimId = nil, 0, 0, nil
+	end
+
+	local function startVisuals()
+		stopVisuals()
+		local plr = getTargetPlayer()
+		if not plr then
+			notif('FalseBan', 'No player selected.', 4, 'warning')
+			return false
+		end
+		local char = plr.Character
+		local root = char and char:FindFirstChild('HumanoidRootPart')
+		local hum = char and char:FindFirstChildOfClass('Humanoid')
+		if not (char and root and hum) then
+			notif('FalseBan', plr.Name .. ' has no character yet.', 4, 'warning')
+			return false
+		end
+
+		targetChar, targetRoot, targetHum = char, root, hum
+		active = true
+		snapshot(char)
+
+		table.insert(conns, char.DescendantAdded:Connect(function(v)
+			if not active then return end
+			if isVisualPart(v) then
+				task.defer(function()
+					if active and v.Parent and not parts[v] then
+						parts[v] = {CFrame = v.CFrame, Transparency = v.Transparency}
+						v.Anchored = true
+					end
+				end)
+			elseif v:IsA('Motor6D') and not motors[v] then
+				motors[v] = v.C0
+			end
+		end))
+
+		-- リスポーンしたら自動で取り直す
+		table.insert(conns, plr.CharacterAdded:Connect(function(newChar)
+			if not active then return end
+			task.wait(0.4)
+			if active and FalseBan.Enabled then startVisuals() end
+		end))
+
+		local mode = Method.Value
+		if mode == 'Fly' then
+			baseY = root.Position.Y
+			table.insert(conns, runService.RenderStepped:Connect(flyStep))
+		elseif mode == 'SpinBot' then
+			table.insert(conns, runService.RenderStepped:Connect(spinStep))
+		elseif mode == 'Animation' then
+			animationStart()
+		end
+
+		if NotifyOnStart.Enabled then
+			notif('FalseBan', plr.Name .. ' → ' .. mode .. ' (client only)', 4)
+		end
+		return true
+	end
+
+	FalseBan = resolveCategory('Blatant', 'Render', 'Utility'):CreateModule({
+		Name = 'FalseBan',
+		Function = function(callback)
+			if callback then
+				refreshList()
+				FalseBan:Clean(playersService.PlayerAdded:Connect(refreshList))
+				FalseBan:Clean(playersService.PlayerRemoving:Connect(function(plr)
+					refreshList()
+					if targetChar and plr.Character == targetChar then stopVisuals() end
+				end))
+				if not startVisuals() then
+					FalseBan:Toggle()
+				end
+			else
+				stopVisuals()
+			end
+		end,
+		Tooltip = 'Makes the selected player look like they are cheating on YOUR screen only.\nNothing is sent to the server, so it cannot actually ban anyone.'
+	})
+
+	PlayerList = FalseBan:CreateDropdown({
+		Name = 'Player',
+		List = playerNames(),
+		Function = function(val)
+			selectedName = val
+			if FalseBan.Enabled then startVisuals() end
+		end
+	})
+
+	Method = FalseBan:CreateDropdown({
+		Name = 'FalseBanMethod',
+		List = {'Fly', 'SpinBot', 'Animation'},
+		Default = 'Fly',
+		Function = function(val)
+			FlyHeight.Object.Visible = val == 'Fly'
+			FlySpeed.Object.Visible = val == 'Fly'
+			FlyBob.Object.Visible = val == 'Fly'
+			SpinSpeed.Object.Visible = val == 'SpinBot'
+			SpinTilt.Object.Visible = val == 'SpinBot'
+			AnimMode.Object.Visible = val == 'Animation'
+			AnimSpeed.Object.Visible = val == 'Animation'
+			if FalseBan.Enabled then startVisuals() end
+		end,
+		Tooltip = 'Fly - floats them in the air\nSpinBot - spins their body\nAnimation - plays blatant emotes on them'
+	})
+
+	FlyHeight = FalseBan:CreateSlider({
+		Name = 'Fly Height', Min = 0, Max = 120, Default = 25, Darker = true,
+		Suffix = function(v) return v == 1 and 'stud' or 'studs' end,
+		Function = function() baseY = targetRoot and targetRoot.Position.Y or nil end
+	})
+	FlySpeed = FalseBan:CreateSlider({
+		Name = 'Fly Bob Speed', Min = 0, Max = 10, Default = 2, Decimal = 10, Darker = true
+	})
+	FlyBob = FalseBan:CreateSlider({
+		Name = 'Fly Bob Amount', Min = 0, Max = 20, Default = 3, Decimal = 10, Darker = true,
+		Suffix = function(v) return v == 1 and 'stud' or 'studs' end
+	})
+	SpinSpeed = FalseBan:CreateSlider({
+		Name = 'Spin Speed', Min = 0, Max = 3000, Default = 900, Darker = true, Visible = false,
+		Suffix = 'deg/s'
+	})
+	SpinTilt = FalseBan:CreateSlider({
+		Name = 'Spin Tilt', Min = -90, Max = 90, Default = 0, Darker = true, Visible = false,
+		Suffix = 'degrees'
+	})
+	AnimMode = FalseBan:CreateDropdown({
+		Name = 'Animation', List = animNames, Default = 'Dance', Darker = true, Visible = false,
+		Function = function() lastAnimId = nil end
+	})
+	AnimSpeed = FalseBan:CreateSlider({
+		Name = 'Animation Speed', Min = 0.1, Max = 5, Default = 1, Decimal = 10, Darker = true, Visible = false
+	})
+
+	Teammates = FalseBan:CreateToggle({
+		Name = 'Refresh list',
+		Function = function() refreshList() end
+	})
+	NotifyOnStart = FalseBan:CreateToggle({Name = 'Notify', Default = true})
+
+	refreshList()
+end)
