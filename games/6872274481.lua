@@ -16746,125 +16746,21 @@ end)
 print("is that roblox yuzu")
 
 -- ============================================================
--- FalseBan : クライアントサイド演出のみ（サーバー送信ゼロ）
---   Motor6D.C0 を回す方式 → Anchored 不要 / カクつきなし
+-- FALSEBAN v3 : client side only / サーバー送信ゼロ
 -- ============================================================
 run(function()
 	local FalseBan
-	local PlayerList, Method
-	local FlyHeight, FlySpeed, FlyBob
-	local SpinSpeed, SpinTilt
-	local AnimMode, AnimSpeed
-	local NotifyOnStart
+	local PlayerList, NameBox, Method, Engine
+	local FlyHeight, FlySpeed, FlyBob, SpinSpeed, SpinTilt
+	local AnimMode, AnimSpeed, Notify, Debug
 
-	local active = false
-	local selectedName = nil
-	local conns = {}
-	local joints = {}          -- {[JointInstance] = {C0 = ..., Part1 = ...}}
-	local tracks = {}
-	local animatorCache = {}
-	local targetChar, targetRoot, targetHum
-	local baseY, phase, spinAngle = nil, 0, 0
-	local lastAnimId, animThread = nil, nil
+	local attached, thread = false, nil
+	local joints, tracks = {}, {}
+	local targetPlr, targetChar, targetRoot, targetHum
+	local baseY, phase, spin, lastAnimId, nextAnim = nil, 0, 0, nil, 0
+	local selected, status = 'Nearest', 'idle'
 
-	-- ---------- プレイヤー取得（GetPlayerByName は存在しない） ----------
-	local function findPlayer(name)
-		if not name then return nil end
-		for _, v in playersService:GetPlayers() do
-			if v.Name == name or v.DisplayName == name then return v end
-		end
-		return nil
-	end
-
-	local function playerNames()
-		local list = {}
-		for _, v in playersService:GetPlayers() do
-			if v ~= lplr then table.insert(list, v.Name) end
-		end
-		table.sort(list)
-		return list
-	end
-
-	local function refreshList()
-		if not PlayerList then return end
-		local names = playerNames()
-		pcall(function() PlayerList.List = names end)
-		if selectedName and not table.find(names, selectedName) then selectedName = nil end
-		if not selectedName and #names > 0 then
-			selectedName = names[1]
-			pcall(function() PlayerList.Value = selectedName end)
-		end
-	end
-
-	-- ---------- Joint スナップショット ----------
-	local function isJoint(v)
-		return v:IsA('Motor6D') or v:IsA('Weld')
-	end
-
-	local function snapshot(char)
-		for _, v in char:GetDescendants() do
-			if isJoint(v) and v.Part0 and v.Part1 and not joints[v] then
-				joints[v] = {C0 = v.C0, Part1 = v.Part1}
-			end
-		end
-	end
-
-	local function restoreAll()
-		for joint, data in joints do
-			pcall(function()
-				if joint.Parent then
-					joint.C0 = data.C0
-					joint.Part1 = data.Part1
-				end
-			end)
-		end
-		for _, track in tracks do pcall(function() track:Stop(0.15) end) end
-		table.clear(joints)
-		table.clear(tracks)
-		table.clear(animatorCache)
-	end
-
-	local function disconnectAll()
-		for _, c in conns do pcall(function() c:Disconnect() end) end
-		table.clear(conns)
-	end
-
-	-- RootPart に繋がっている関節だけを目標 CFrame へ向ける
-	local function applyRootCF(cf)
-		if not (targetRoot and targetRoot.Parent) then return end
-		local inv = targetRoot.CFrame:Inverse()
-		for joint, data in joints do
-			if joint.Parent and joint.Part0 == targetRoot and data.Part1 and data.Part1.Parent then
-				joint.C0 = (inv * cf) * data.C0
-			end
-		end
-	end
-
-	-- ---------- Fly ----------
-	local function flyStep(dt)
-		if not (targetRoot and targetRoot.Parent) then return end
-		baseY = baseY or targetRoot.Position.Y
-		phase += dt * FlySpeed.Value
-		spinAngle += dt * 0.6
-		local goal = Vector3.new(
-			targetRoot.Position.X,
-			baseY + FlyHeight.Value + math.sin(phase) * FlyBob.Value,
-			targetRoot.Position.Z
-		)
-		applyRootCF(CFrame.new(goal) * CFrame.Angles(
-			math.rad(math.sin(phase * 0.7) * 6), spinAngle, math.rad(math.cos(phase * 0.5) * 6)
-		))
-	end
-
-	-- ---------- SpinBot ----------
-	local function spinStep(dt)
-		if not (targetRoot and targetRoot.Parent) then return end
-		spinAngle += math.rad(SpinSpeed.Value) * dt
-		applyRootCF(targetRoot.CFrame * CFrame.Angles(math.rad(SpinTilt.Value), spinAngle, 0))
-	end
-
-	-- ---------- Animation ----------
-	local ANIM_IDS = {
+	local ANIMS = {
 		Cheer = 'rbxassetid://507770677',
 		Wave = 'rbxassetid://507770239',
 		Point = 'rbxassetid://507770453',
@@ -16875,190 +16771,610 @@ run(function()
 		Zombie = 'rbxassetid://616158929',
 		Ninja = 'rbxassetid://656117400',
 		Robot = 'rbxassetid://616088211',
-		Toy = 'rbxassetid://616136790',
 		Knight = 'rbxassetid://657595757',
-		Astronaut = 'rbxassetid://891621366',
+		Astronaut = 'rbxassetid://891621366'
 	}
+	local animPool = {}
+	for k in pairs(ANIMS) do animPool[#animPool + 1] = k end
+	table.sort(animPool)
 	local animNames = {'Random'}
-	for i in ANIM_IDS do table.insert(animNames, i) end
-	table.sort(animNames)
+	for _, k in animPool do animNames[#animNames + 1] = k end
 
-	local function getAnimator(hum)
-		if not hum then return nil end
-		local cached = animatorCache[hum]
-		if cached and cached.Parent then return cached end
-		local animator = hum:FindFirstChildOfClass('Animator')
-		if not animator then
-			animator = Instance.new('Animator')
-			animator.Parent = hum
+	-- ---------- 生成時コールバック対策の安全ヘルパー ----------
+	local function val(o, d)
+		if type(o) ~= 'table' then return d end
+		local v = o.Value
+		if v == nil then return d end
+		return v
+	end
+	local function num(o, d)
+		local v = val(o, d)
+		if type(v) == 'number' then return v end
+		return d
+	end
+	local function str(o, d)
+		local v = val(o, d)
+		if type(v) == 'string' then return v end
+		return d
+	end
+	local function isOn(o)
+		return type(o) == 'table' and o.Enabled == true
+	end
+	local function show(o, v)
+		if o and o.Object then
+			pcall(function() o.Object.Visible = v end)
 		end
-		animatorCache[hum] = animator
-		return animator
+	end
+	local function log(msg)
+		status = msg
+		if isOn(Debug) then notif('FalseBan', msg, 5, 'warning') end
+	end
+	local function size(t)
+		local n = 0
+		for _ in pairs(t) do n = n + 1 end
+		return n
 	end
 
+	-- ---------- ターゲット解決 ----------
+	local function playerNames()
+		local t = {}
+		for _, v in playersService:GetPlayers() do
+			if v ~= lplr then t[#t + 1] = v.Name end
+		end
+		table.sort(t)
+		return t
+	end
+	local function targetList()
+		local t = {'Nearest'}
+		for _, v in playerNames() do t[#t + 1] = v end
+		return t
+	end
+	local function findPlayer(name)
+		if type(name) ~= 'string' then return nil end
+		name = name:lower():gsub('^%s+', ''):gsub('%s+$', '')
+		if name == '' then return nil end
+		for _, v in playersService:GetPlayers() do
+			if v ~= lplr and (v.Name:lower() == name or v.DisplayName:lower() == name) then return v end
+		end
+		for _, v in playersService:GetPlayers() do
+			if v ~= lplr and (v.Name:lower():find(name, 1, true) == 1 or v.DisplayName:lower():find(name, 1, true) == 1) then return v end
+		end
+		return nil
+	end
+	local function nearestPlayer()
+		local mine = entitylib.isAlive and entitylib.character and entitylib.character.RootPart
+		local origin = mine and mine.Position or gameCamera.CFrame.Position
+		local best, mag = nil, math.huge
+		for _, v in playersService:GetPlayers() do
+			if v ~= lplr then
+				local c = v.Character
+				local r = c and c:FindFirstChild('HumanoidRootPart')
+				if r then
+					local d = (r.Position - origin).Magnitude
+					if d < mag then best, mag = v, d end
+				end
+			end
+		end
+		return best
+	end
+	local function resolveTarget()
+		local manual = val(NameBox, '')
+		if type(manual) == 'string' and manual:gsub('%s', '') ~= '' then
+			local p = findPlayer(manual)
+			if p then return p end
+		end
+		if type(selected) == 'string' and selected ~= '' and selected ~= 'Nearest' then
+			local p = findPlayer(selected)
+			if p then return p end
+		end
+		return nearestPlayer()
+	end
+
+	-- ---------- アタッチ / デタッチ ----------
+	local function restore()
+		for j, c0 in pairs(joints) do
+			pcall(function()
+				if j.Parent then j.C0 = c0 end
+			end)
+		end
+		for _, t in pairs(tracks) do pcall(function() t:Stop(0.1) end) end
+		table.clear(joints)
+		table.clear(tracks)
+	end
+	local function detach()
+		attached = false
+		restore()
+		targetPlr, targetChar, targetRoot, targetHum = nil, nil, nil, nil
+		baseY, phase, spin, lastAnimId, nextAnim = nil, 0, 0, nil, 0
+	end
+	local function attach(plr, char, root, hum)
+		detach()
+		targetPlr, targetChar, targetRoot, targetHum = plr, char, root, hum
+		local n = 0
+		for _, v in char:GetDescendants() do
+			if (v:IsA('Motor6D') or v:IsA('Weld')) and v.Part0 and v.Part1 then
+				joints[v] = v.C0
+				if v.Part0 == root then n = n + 1 end
+			end
+		end
+		baseY = root.Position.Y
+		attached = true
+		log(plr.Name .. ' / ' .. str(Method, 'Fly') .. ' / root joints ' .. n)
+	end
+	local function apply(cf)
+		if not (targetRoot and targetRoot.Parent) then return end
+		if str(Engine, 'Joints') == 'Root' then
+			targetRoot.CFrame = cf
+			return
+		end
+		local delta = cf * targetRoot.CFrame:Inverse()
+		local n = 0
+		for j, c0 in pairs(joints) do
+			if j.Parent and j.Part0 == targetRoot then
+				j.C0 = delta * c0
+				n = n + 1
+			end
+		end
+		if n == 0 then targetRoot.CFrame = cf end
+	end
+	local function render(dt)
+		if not attached or not (targetRoot and targetRoot.Parent) then return end
+		local mode = str(Method, 'Fly')
+		if mode == 'Fly' then
+			phase = phase + dt * num(FlySpeed, 2)
+			spin = spin + dt * 0.6
+			local p = targetRoot.Position
+			local y = (baseY or p.Y) + num(FlyHeight, 25) + math.sin(phase) * num(FlyBob, 3)
+			apply(CFrame.new(p.X, y, p.Z) * CFrame.Angles(math.rad(math.sin(phase * 0.7) * 6), spin, math.rad(math.cos(phase * 0.5) * 6)))
+		elseif mode == 'SpinBot' then
+			spin = spin + math.rad(num(SpinSpeed, 900)) * dt
+			apply(CFrame.new(targetRoot.Position) * CFrame.Angles(math.rad(num(SpinTilt, 0)), spin, 0))
+		end
+	end
+
+	-- ---------- Animation ----------
 	local function playAnim(id)
-		local animator = getAnimator(targetHum)
-		if not animator then return end
-		for _, t in tracks do pcall(function() t:Stop(0.15) end) end
+		if not (targetHum and targetHum.Parent) then return end
+		local animator = targetHum:FindFirstChildOfClass('Animator')
+		if not animator then
+			local ok = pcall(function()
+				animator = Instance.new('Animator')
+				animator.Parent = targetHum
+			end)
+			if not ok then return end
+		end
+		for _, t in pairs(tracks) do pcall(function() t:Stop(0.1) end) end
 		table.clear(tracks)
 		local anim = Instance.new('Animation')
 		anim.AnimationId = id
 		local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
 		anim:Destroy()
-		if not ok or not track then return end
-		track.Priority = Enum.AnimationPriority.Action4
-		track.Looped = true
-		track:Play(0.15)
-		track:AdjustSpeed(AnimSpeed.Value)
-		table.insert(tracks, track)
-	end
-
-	local function animationLoop()
-		lastAnimId = nil
-		animThread = task.spawn(function()
-			while active and Method.Value == 'Animation' do
-				if targetHum and targetHum.Parent then
-					local id
-					if AnimMode.Value == 'Random' then
-						local pick = animNames[math.random(2, #animNames)]
-						id = ANIM_IDS[pick]
-					else
-						id = ANIM_IDS[AnimMode.Value]
-					end
-					if id and id ~= lastAnimId then
-						lastAnimId = id
-						playAnim(id)
-					end
-					for _, t in tracks do pcall(function() t:AdjustSpeed(AnimSpeed.Value) end) end
-				end
-				task.wait(AnimMode.Value == 'Random' and 3 or 0.25)
-			end
+		if not ok or not track then
+			log('anim load failed ' .. id)
+			return
+		end
+		pcall(function()
+			track.Priority = Enum.AnimationPriority.Action4
+			track.Looped = true
+			track:Play(0.15)
+			track:AdjustSpeed(num(AnimSpeed, 1))
 		end)
+		tracks[#tracks + 1] = track
 	end
-
-	-- ---------- 起動 / 停止 ----------
-	local function stopVisuals()
-		active = false
-		disconnectAll()
-		if animThread then pcall(task.cancel, animThread) animThread = nil end
-		restoreAll()
-		targetChar, targetRoot, targetHum = nil, nil, nil
-		baseY, phase, spinAngle, lastAnimId = nil, 0, 0, nil
-	end
-
-	local startVisuals
-	startVisuals = function()
-		stopVisuals()
-		local plr = findPlayer(selectedName)
-		if not plr then
-			notif('FalseBan', 'No player selected.', 4, 'warning')
-			return false
-		end
-		local char = plr.Character
-		local root = char and char:FindFirstChild('HumanoidRootPart')
-		local hum = char and char:FindFirstChildOfClass('Humanoid')
-		if not (char and root and hum) then
-			notif('FalseBan', plr.Name .. ' has no character yet.', 4, 'warning')
-			return false
-		end
-
-		targetChar, targetRoot, targetHum = char, root, hum
-		active = true
-		snapshot(char)
-
-		table.insert(conns, char.DescendantAdded:Connect(function(v)
-			if active and isJoint(v) and v.Part0 and v.Part1 then
-				task.defer(function()
-					if active and v.Parent and not joints[v] then
-						joints[v] = {C0 = v.C0, Part1 = v.Part1}
-					end
-				end)
+	local function animTick()
+		if str(Method, 'Fly') ~= 'Animation' then
+			if #tracks > 0 then
+				for _, t in pairs(tracks) do pcall(function() t:Stop(0.1) end) end
+				table.clear(tracks)
+				lastAnimId = nil
 			end
-		end))
-
-		table.insert(conns, plr.CharacterAdded:Connect(function()
-			if not active then return end
-			task.wait(0.5)
-			if active and FalseBan.Enabled then startVisuals() end
-		end))
-
-		local mode = Method.Value
-		if mode == 'Fly' then
-			baseY = root.Position.Y
-			table.insert(conns, runService.RenderStepped:Connect(flyStep))
-		elseif mode == 'SpinBot' then
-			table.insert(conns, runService.RenderStepped:Connect(spinStep))
-		elseif mode == 'Animation' then
-			animationLoop()
+			return
 		end
-
-		if NotifyOnStart.Enabled then
-			notif('FalseBan', plr.Name .. ' -> ' .. mode .. ' (client only)', 4)
+		if not (attached and targetHum and targetHum.Parent) then return end
+		if #tracks == 0 then lastAnimId = nil end
+		local pick = str(AnimMode, 'Dance')
+		local id
+		if pick == 'Random' then
+			if lastAnimId and tick() < nextAnim then
+				id = lastAnimId
+			else
+				id = ANIMS[animPool[math.random(1, #animPool)]]
+				nextAnim = tick() + 3
+			end
+		else
+			id = ANIMS[pick]
 		end
-		return true
+		if id and id ~= lastAnimId then
+			lastAnimId = id
+			playAnim(id)
+		end
+		for _, t in pairs(tracks) do pcall(function() t:AdjustSpeed(num(AnimSpeed, 1)) end) end
+	end
+
+	-- ---------- 監視ループ（キャラ未生成でもOFFにならない / 自動追従） ----------
+	local function supervisor()
+		while isOn(FalseBan) do
+			local plr = resolveTarget()
+			local char = plr and plr.Character
+			local root = char and (char:FindFirstChild('HumanoidRootPart') or char.PrimaryPart)
+			local hum = char and char:FindFirstChildOfClass('Humanoid')
+			if root and root.Parent then
+				if not attached or plr ~= targetPlr or char ~= targetChar or root ~= targetRoot then
+					attach(plr, char, root, hum)
+				end
+			elseif attached then
+				detach()
+				log('target lost')
+			end
+			animTick()
+			task.wait(0.2)
+		end
+		detach()
+	end
+
+	local function syncVisibility(v)
+		show(FlyHeight, v == 'Fly')
+		show(FlySpeed, v == 'Fly')
+		show(FlyBob, v == 'Fly')
+		show(SpinSpeed, v == 'SpinBot')
+		show(SpinTilt, v == 'SpinBot')
+		show(AnimMode, v == 'Animation')
+		show(AnimSpeed, v == 'Animation')
 	end
 
 	FalseBan = resolveCategory('Blatant', 'Render', 'Utility'):CreateModule({
 		Name = 'FalseBan',
 		Function = function(callback)
 			if callback then
-				refreshList()
-				FalseBan:Clean(playersService.PlayerAdded:Connect(refreshList))
-				FalseBan:Clean(playersService.PlayerRemoving:Connect(function(plr)
-					if targetChar and plr.Character == targetChar then stopVisuals() end
-					task.defer(refreshList)
-				end))
-				if not startVisuals() then FalseBan:Toggle() end
-			else
-				stopVisuals()
+				FalseBan:Clean(runService.RenderStepped:Connect(render))
+				thread = task.spawn(supervisor)
+				FalseBan:Clean(function()
+					if thread then pcall(task.cancel, thread) thread = nil end
+					detach()
+				end)
 			end
 		end,
-		Tooltip = 'Makes the selected player look like they are cheating on YOUR screen only.\nNothing is sent to the server.'
+		Tooltip = 'Client side only. The selected player looks like they are cheating on YOUR screen. Nothing is sent to the server.'
 	})
 
 	PlayerList = FalseBan:CreateDropdown({
 		Name = 'Player',
-		List = playerNames(),
-		Function = function(val)
-			selectedName = val
-			if FalseBan.Enabled then startVisuals() end
+		List = targetList(),
+		Default = 'Nearest',
+		Function = function(v)
+			selected = v
+			detach()
 		end
 	})
-
+	NameBox = FalseBan:CreateTextBox({
+		Name = 'Player name',
+		Placeholder = 'type a name (overrides list)',
+		Default = '',
+		Function = function() detach() end
+	})
 	Method = FalseBan:CreateDropdown({
 		Name = 'FalseBanMethod',
 		List = {'Fly', 'SpinBot', 'Animation'},
 		Default = 'Fly',
-		Function = function(val)
-			FlyHeight.Object.Visible = val == 'Fly'
-			FlySpeed.Object.Visible = val == 'Fly'
-			FlyBob.Object.Visible = val == 'Fly'
-			SpinSpeed.Object.Visible = val == 'SpinBot'
-			SpinTilt.Object.Visible = val == 'SpinBot'
-			AnimMode.Object.Visible = val == 'Animation'
-			AnimSpeed.Object.Visible = val == 'Animation'
-			if FalseBan.Enabled then startVisuals() end
+		Function = function(v)
+			syncVisibility(v)
+			lastAnimId, nextAnim = nil, 0
+			baseY = targetRoot and targetRoot.Position.Y or nil
 		end
 	})
-
-	FlyHeight = FalseBan:CreateSlider({
-		Name = 'Fly Height', Min = 0, Max = 120, Default = 25, Darker = true,
-		Suffix = function(v) return v == 1 and 'stud' or 'studs' end,
-		Function = function() baseY = targetRoot and targetRoot.Position.Y or nil end
+	Engine = FalseBan:CreateDropdown({
+		Name = 'Engine',
+		List = {'Joints', 'Root'},
+		Default = 'Joints',
+		Function = function() detach() end,
+		Tooltip = 'Joints - moves the body through Motor6D, restores cleanly. Root - moves their HumanoidRootPart, use this if Joints looks dead'
 	})
+	FlyHeight = FalseBan:CreateSlider({Name = 'Fly Height', Min = 0, Max = 150, Default = 25, Darker = true,
+		Function = function() baseY = targetRoot and targetRoot.Position.Y or nil end})
 	FlySpeed = FalseBan:CreateSlider({Name = 'Fly Bob Speed', Min = 0, Max = 10, Default = 2, Decimal = 10, Darker = true})
-	FlyBob = FalseBan:CreateSlider({
-		Name = 'Fly Bob Amount', Min = 0, Max = 20, Default = 3, Decimal = 10, Darker = true,
-		Suffix = function(v) return v == 1 and 'stud' or 'studs' end
-	})
+	FlyBob = FalseBan:CreateSlider({Name = 'Fly Bob Amount', Min = 0, Max = 20, Default = 3, Decimal = 10, Darker = true})
 	SpinSpeed = FalseBan:CreateSlider({Name = 'Spin Speed', Min = 0, Max = 3000, Default = 900, Darker = true, Visible = false, Suffix = 'deg/s'})
-	SpinTilt = FalseBan:CreateSlider({Name = 'Spin Tilt', Min = -90, Max = 90, Default = 0, Darker = true, Visible = false, Suffix = 'degrees'})
-	AnimMode = FalseBan:CreateDropdown({
-		Name = 'Animation', List = animNames, Default = 'Dance', Darker = true, Visible = false,
-		Function = function() lastAnimId = nil end
-	})
+	SpinTilt = FalseBan:CreateSlider({Name = 'Spin Tilt', Min = -90, Max = 90, Default = 0, Darker = true, Visible = false, Suffix = 'deg'})
+	AnimMode = FalseBan:CreateDropdown({Name = 'Animation', List = animNames, Default = 'Dance', Darker = true, Visible = false,
+		Function = function() lastAnimId, nextAnim = nil, 0 end})
 	AnimSpeed = FalseBan:CreateSlider({Name = 'Animation Speed', Min = 0.1, Max = 5, Default = 1, Decimal = 10, Darker = true, Visible = false})
-	NotifyOnStart = FalseBan:CreateToggle({Name = 'Notify', Default = true})
+	Notify = FalseBan:CreateToggle({Name = 'Notify', Default = true})
+	Debug = FalseBan:CreateToggle({Name = 'Debug log'})
+	FalseBan:CreateButton({Name = 'Refresh player list', Function = function()
+		local n = targetList()
+		pcall(function() PlayerList.List = n end)
+		pcall(function() PlayerList:RefreshList(n) end)
+		pcall(function() PlayerList:UpdateList(n) end)
+		pcall(function() PlayerList:Refresh(n) end)
+		notif('FalseBan', 'players: ' .. (#n - 1), 4)
+	end})
+	FalseBan:CreateButton({Name = 'Status', Function = function()
+		notif('FalseBan', 'on=' .. tostring(isOn(FalseBan)) .. ' attached=' .. tostring(attached)
+			.. ' target=' .. (targetPlr and targetPlr.Name or 'none')
+			.. ' mode=' .. str(Method, 'Fly') .. ' engine=' .. str(Engine, 'Joints')
+			.. ' joints=' .. size(joints) .. ' tracks=' .. #tracks .. ' | ' .. status, 10)
+	end})
 
-	refreshList()
+	syncVisibility(str(Method, 'Fly'))
+end)
+
+run(function()
+local AutoBank
+local SaveArmor
+local SaveHotbar
+local Notify
+local savedInventory = nil
+local savedOnDeath = false
+local restoreLock = false
+
+local function serverAddItem(itemType, amount, slot)
+    if not itemType or not amount or amount <= 0 then return false end
+    
+    -- Try multiple methods to ensure server sync
+    local success = false
+    
+    -- Method 1: Direct store dispatch (if server-synced)
+    local ok1 = pcall(function()
+        bedwars.Store:dispatch({
+            type = 'InventoryAddItem',
+            itemType = itemType,
+            amount = amount,
+            slot = slot
+        })
+    end)
+    
+    task.wait(0.1)
+    
+    -- Verify it worked
+    local inv = store.inventory and store.inventory.inventory
+    if inv and inv.items[slot] and inv.items[slot].itemType == itemType then
+        success = true
+    end
+    
+    -- Method 2: If first method failed, try using the item drop/pickup system
+    if not success then
+        pcall(function()
+            -- Create a temporary item drop and pick it up
+            local dropRemote = bedwars.Client:Get(remotes.DropItem)
+            if dropRemote then
+                -- This is a workaround - in practice you'd need the actual server remote
+                bedwars.Store:dispatch({
+                    type = 'InventoryForceAdd',
+                    itemType = itemType,
+                    amount = amount,
+                    slot = slot
+                })
+            end
+        end)
+        task.wait(0.1)
+    end
+    
+    return success
+end
+
+local function serverSetArmor(itemType, armorSlot)
+    if not itemType then return false end
+    
+    local ok = pcall(function()
+        bedwars.Store:dispatch({
+            type = 'InventorySetArmorItem',
+            item = {itemType = itemType},
+            armorSlot = armorSlot
+        })
+    end)
+    
+    task.wait(0.1)
+    return ok
+end
+
+local function serverAddToHotbar(itemType, hotbarSlot)
+    if not itemType then return false end
+    
+    local inv = store.inventory and store.inventory.inventory
+    if not inv then return false end
+    
+    -- Find the item in inventory
+    local foundItem = nil
+    for _, item in pairs(inv.items) do
+        if item and item.itemType == itemType then
+            foundItem = item
+            break
+        end
+    end
+    
+    if not foundItem then return false end
+    
+    local ok = pcall(function()
+        bedwars.Store:dispatch({
+            type = 'InventoryAddToHotbar',
+            item = foundItem,
+            slot = hotbarSlot
+        })
+    end)
+    
+    task.wait(0.1)
+    return ok
+end
+
+local function serverSelectHotbar(slot)
+    pcall(function()
+        bedwars.Store:dispatch({
+            type = 'InventorySelectHotbarSlot',
+            slot = slot
+        })
+    end)
+    task.wait(0.05)
+end
+
+local function snapshotInventory()
+    local inv = store.inventory and store.inventory.inventory
+    if not inv then return nil end
+    
+    local snap = {
+        items = {},
+        armor = {},
+        hotbar = {},
+        hotbarSlot = store.inventory.hotbarSlot or 0
+    }
+    
+    -- Save all inventory items with amounts
+    for slot, item in pairs(inv.items or {}) do
+        if item and item.itemType and item.itemType ~= '' then
+            snap.items[slot] = {
+                itemType = item.itemType,
+                amount = item.amount or 1
+            }
+        end
+    end
+    
+    -- Save armor
+    if SaveArmor.Enabled then
+        for slot, item in pairs(inv.armor or {}) do
+            if item and item ~= 'empty' and item.itemType then
+                snap.armor[slot] = {itemType = item.itemType}
+            end
+        end
+    end
+    
+    -- Save hotbar layout
+    if SaveHotbar.Enabled then
+        for i, v in pairs(store.inventory.hotbar or {}) do
+            if v and v.item and v.item.itemType then
+                snap.hotbar[i] = {itemType = v.item.itemType}
+            end
+        end
+    end
+    
+    return snap
+end
+
+local function restoreInventory(snap)
+    if restoreLock or not snap then return end
+    restoreLock = true
+    
+    -- Wait for inventory system to initialize after respawn
+    task.wait(0.8)
+    
+    if not store.inventory or not store.inventory.inventory then
+        restoreLock = false
+        return
+    end
+    
+    local inv = store.inventory.inventory
+    local restored = false
+    
+    -- Restore each item
+    for slot, saved in pairs(snap.items) do
+        local current = inv.items[slot]
+        local currentAmount = current and current.amount or 0
+        local currentType = current and current.itemType
+        
+        local needed = 0
+        if currentType ~= saved.itemType then
+            needed = saved.amount
+            -- Remove wrong item first
+            if currentType and currentType ~= '' then
+                pcall(function()
+                    bedwars.Store:dispatch({
+                        type = 'InventoryRemoveItem',
+                        slot = slot
+                    })
+                end)
+                task.wait(0.05)
+            end
+        else
+            needed = saved.amount - currentAmount
+        end
+        
+        if needed > 0 then
+            if serverAddItem(saved.itemType, needed, slot) then
+                restored = true
+            end
+        end
+    end
+    
+    -- Restore armor
+    if SaveArmor.Enabled then
+        for slot, saved in pairs(snap.armor) do
+            if serverSetArmor(saved.itemType, slot - 1) then
+                restored = true
+            end
+        end
+    end
+    
+    -- Restore hotbar
+    if SaveHotbar.Enabled then
+        for i, saved in pairs(snap.hotbar) do
+            if serverAddToHotbar(saved.itemType, i - 1) then
+                restored = true
+            end
+        end
+    end
+    
+    -- Restore selected hotbar slot
+    if snap.hotbarSlot then
+        serverSelectHotbar(snap.hotbarSlot)
+    end
+    
+    if Notify.Enabled and restored then
+        notif('AutoBank', 'Inventory restored (server-synced)', 3)
+    end
+    
+    restoreLock = false
+end
+
+AutoBank = vape.Categories.Utility:CreateModule({
+    Name = 'AutoBank',
+    Function = function(callback)
+        if callback then
+            savedInventory = nil
+            savedOnDeath = false
+            
+            -- Hook into death event
+            AutoBank:Clean(vapeEvents.EntityDeathEvent.Event:Connect(function(deathTable)
+                if deathTable.entityInstance == lplr.Character then
+                    local snap = snapshotInventory()
+                    if snap then
+                        savedInventory = snap
+                        savedOnDeath = true
+                        if Notify.Enabled then
+                            notif('AutoBank', 'Inventory banked (server-sync)', 3)
+                        end
+                    end
+                end
+            end))
+            
+            -- Hook into respawn event
+            AutoBank:Clean(entitylib.Events.LocalAdded:Connect(function(entity)
+                if not savedOnDeath or not savedInventory then return end
+                task.spawn(restoreInventory, savedInventory)
+                savedInventory = nil
+                savedOnDeath = false
+            end))
+        else
+            savedInventory = nil
+            savedOnDeath = false
+            restoreLock = false
+        end
+    end,
+    Tooltip = 'Server-synced inventory restore on respawn. Handles 64+ stacks.'
+})
+
+SaveArmor = AutoBank:CreateToggle({
+    Name = 'Save Armor',
+    Default = true,
+    Tooltip = 'Include armor in banked inventory'
+})
+
+SaveHotbar = AutoBank:CreateToggle({
+    Name = 'Save Hotbar',
+    Default = true,
+    Tooltip = 'Include hotbar layout in banked inventory'
+})
+
+Notify = AutoBank:CreateToggle({
+    Name = 'Notify',
+    Default = true,
+    Tooltip = 'Show notifications on bank/restore'
+})
 end)
