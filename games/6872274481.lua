@@ -5521,6 +5521,7 @@ end)
 	
 run(function()
 	local TargetPart, Targets, FOV, OtherProjectiles
+	local HorizontalPrediction, VerticalPrediction
 	local old
 	local rayCheck = RaycastParams.new()
 	rayCheck.FilterType = Enum.RaycastFilterType.Include
@@ -5547,6 +5548,13 @@ run(function()
 		return type(prediction) == 'table' and type(prediction.SolveTrajectory) == 'function'
 	end
 
+	-- [added] 予測倍率の安全取得（未生成 / 異常値は 1.0 扱い）
+	local function predictionScale(option)
+		local val = option and option.Value
+		if type(val) ~= 'number' or val ~= val then return 1 end
+		return math.clamp(val, 0, 2)
+	end
+
 	local ProjectileAimbot = vape.Categories.Blatant:CreateModule({
 		Name = 'ProjectileAimbot',
 		Function = function(callback)
@@ -5556,16 +5564,13 @@ run(function()
 					ProjectileAimbot:Toggle()
 					return
 				end
-
 				old = bedwars.ProjectileController.calculateImportantLaunchValues
 				bedwars.ProjectileController.calculateImportantLaunchValues = function(self, projmeta, worldmeta, origin, shootpos)
 					-- 何が来ても元関数に落とす。Promise reject を絶対に起こさない
 					local ok, res = pcall(function()
 						if not projmeta then return old(self, projmeta, worldmeta, origin, shootpos) end
-
 						local pos = shootpos or self:getLaunchPosition(origin)
 						if not pos then return old(self, projmeta, worldmeta, origin, shootpos) end
-
 						local meta = projmeta.getProjectileMeta and projmeta:getProjectileMeta()
 						if not meta then return old(self, projmeta, worldmeta, origin, shootpos) end
 
@@ -5577,7 +5582,6 @@ run(function()
 						elseif type(projmeta.projectile) == 'string' then
 							projName = projmeta.projectile
 						end
-
 						if not OtherProjectiles.Enabled and not projName:find('arrow') then
 							return old(self, projmeta, worldmeta, origin, shootpos)
 						end
@@ -5593,7 +5597,6 @@ run(function()
 						if not plr or not plr.Character or not plr.RootPart then
 							return old(self, projmeta, worldmeta, origin, shootpos)
 						end
-
 						local aimPart = plr[TargetPart.Value] or plr.RootPart
 						if not aimPart then return old(self, projmeta, worldmeta, origin, shootpos) end
 
@@ -5610,7 +5613,6 @@ run(function()
 						if plr.Character.PrimaryPart and plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
 							playerGravity = 6
 						end
-
 						-- NPC は Player が nil。ここが元のクラッシュ地点
 						if plr.Player and plr.Player:GetAttribute('IsOwlTarget') then
 							for _, owl in collectionService:GetTagged('Owl') do
@@ -5623,12 +5625,25 @@ run(function()
 						local bc = bowConst()
 						local rel = projName == 'owl_projectile' and Vector3.zero or Vector3.new(bc.RelX, bc.RelY, bc.RelZ)
 						local newlook = CFrame.new(offsetpos, aimPart.Position) * CFrame.new(rel)
-
 						refreshFilter()
+
+						-- [added] 移動予測を水平 / 垂直で独立してスケールする。
+						-- 弾速・重力・戻り値は一切触らないので物理計算との整合はそのまま。
+						local horizontal = predictionScale(HorizontalPrediction)
+						local vertical = predictionScale(VerticalPrediction)
+						local targetVelocity = projName == 'telepearl' and Vector3.zero or aimPart.AssemblyLinearVelocity
+						targetVelocity = Vector3.new(
+							targetVelocity.X * horizontal,
+							targetVelocity.Y * vertical,
+							targetVelocity.Z * horizontal
+						)
+						-- ジャンプ初速も Y 方向の予測要素なので Vertical に従わせる
+						local jumpVelocity = plr.Jumping and (42.6 * vertical) or nil
+
 						local calc = prediction.SolveTrajectory(
 							newlook.p, projSpeed, gravity, aimPart.Position,
-							projName == 'telepearl' and Vector3.zero or aimPart.AssemblyLinearVelocity,
-							playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck
+							targetVelocity,
+							playerGravity, plr.HipHeight, jumpVelocity, rayCheck
 						)
 						if not calc then return old(self, projmeta, worldmeta, origin, shootpos) end
 
@@ -5641,7 +5656,6 @@ run(function()
 							drawDurationSeconds = projmeta.drawDurationSeconds or meta.maxStrengthChargeSec or 1
 						}
 					end)
-
 					if ok then return res end
 					return old(self, projmeta, worldmeta, origin, shootpos)
 				end
@@ -5659,6 +5673,26 @@ run(function()
 	TargetPart = ProjectileAimbot:CreateDropdown({Name = 'Part', List = {'RootPart', 'Head'}})
 	FOV = ProjectileAimbot:CreateSlider({Name = 'FOV', Min = 1, Max = 1000, Default = 1000})
 	OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true})
+
+	-- [added] 独立した予測倍率
+	HorizontalPrediction = ProjectileAimbot:CreateSlider({
+		Name = 'Horizontal Prediction',
+		Min = 0,
+		Max = 2,
+		Default = 1,
+		Decimal = 10,
+		Suffix = 'x',
+		Tooltip = 'Scales the target\'s X/Z velocity used for leading.\n0 - aims at where they are now\n1 - stock prediction\n2 - leads twice as far'
+	})
+	VerticalPrediction = ProjectileAimbot:CreateSlider({
+		Name = 'Vertical Prediction',
+		Min = 0,
+		Max = 2,
+		Default = 1,
+		Decimal = 10,
+		Suffix = 'x',
+		Tooltip = 'Scales the target\'s Y velocity and jump velocity used for leading.\nGravity itself is untouched, so falling targets still get their drop compensation'
+	})
 end)
 
 run(function()
