@@ -5520,212 +5520,228 @@ run(function()
 end)
 	
 run(function()
-	local TargetPart, Targets, FOV, OtherProjectiles
-	local HorizontalPrediction, VerticalPrediction
-	local DistanceCheck, Distance -- [added]
-	local old
-	local rayCheck = RaycastParams.new()
-	rayCheck.FilterType = Enum.RaycastFilterType.Include
+local TargetPart, Targets, Range, HorizontalPrediction, VerticalPrediction, OtherProjectiles, AutoCharge, TargetMode, PingOffset
+local old
+local rayCheck = RaycastParams.new()
+rayCheck.FilterType = Enum.RaycastFilterType.Include
+local function refreshFilter()
+local map = workspace:FindFirstChild('Map')
+if map then
+rayCheck.FilterDescendantsInstances = {map}
+return true
+end
+rayCheck.FilterDescendantsInstances = {}
+return false
+end
+local function bowConst()
+local bc = bedwars.BowConstantsTable
+if type(bc) == 'table' and bc.RelX then return bc end
+return {RelX = 0.8, RelY = -0.6, RelZ = 0}
+end
+local function hasSolver()
+return type(prediction) == 'table' and type(prediction.SolveTrajectory) == 'function'
+end
+-- Forest tracking state
+local forestHits = {}
+local forestHitCount = 0
+local forestMaxHits = 5
+local function resetForestTracking()
+forestHits = {}
+forestHitCount = 0
+end
+local sortmethods = {
+Distance = function(a, b)
+if not a.Entity or not a.Entity.RootPart then return false end
+if not b.Entity or not b.Entity.RootPart then return true end
+local selfpos = entitylib.character.RootPart.Position
+local distA = (a.Entity.RootPart.Position - selfpos).Magnitude
+local distB = (b.Entity.RootPart.Position - selfpos).Magnitude
+return distA < distB
+end,
+Health = function(a, b)
+return a.Entity.Health < b.Entity.Health
+end,
+Forest = function(a, b)
+if not a.Entity then return false end
+if not b.Entity then return true end
+local aHit = forestHits[a.Entity] or false
+local bHit = forestHits[b.Entity] or false
+if not aHit and bHit then return true end
+if aHit and not bHit then return false end
+if not a.Entity.RootPart then return false end
+if not b.Entity.RootPart then return true end
+local selfpos = entitylib.character.RootPart.Position
+local distA = (a.Entity.RootPart.Position - selfpos).Magnitude
+local distB = (b.Entity.RootPart.Position - selfpos).Magnitude
+return distA < distB
+end
+}
+local ProjectileAimbot = vape.Categories.Blatant:CreateModule({
+Name = 'ProjectileAimbot',
+Function = function(callback)
+if callback then
+if not hasSolver() then
+notif('ProjectileAimbot', 'prediction.SolveTrajectory missing', 8, 'alert')
+ProjectileAimbot:Toggle()
+return
+end
+resetForestTracking()
+old = bedwars.ProjectileController.calculateImportantLaunchValues
+bedwars.ProjectileController.calculateImportantLaunchValues = function(self, projmeta, worldmeta, origin, shootpos)
+local ok, res = pcall(function()
+if not projmeta then return old(self, projmeta, worldmeta, origin, shootpos) end
+local pos = shootpos or self:getLaunchPosition(origin)
+if not pos then return old(self, projmeta, worldmeta, origin, shootpos) end
+local meta = projmeta.getProjectileMeta and projmeta:getProjectileMeta()
+if not meta then return old(self, projmeta, worldmeta, origin, shootpos) end
+local projName = ''
+if type(projmeta.projectileType) == 'function' then
+local okp, n = pcall(projmeta.projectileType, 'arrow')
+projName = okp and tostring(n) or ''
+elseif type(projmeta.projectile) == 'string' then
+projName = projmeta.projectile
+end
+if not OtherProjectiles.Enabled and not projName:find('arrow') then
+return old(self, projmeta, worldmeta, origin, shootpos)
+end
+local plr = entitylib.EntityMouse({
+Part = 'RootPart',
+Range = Range.Value,
+Players = Targets.Players.Enabled,
+NPCs = Targets.NPCs.Enabled,
+Wallcheck = Targets.Walls.Enabled,
+Origin = pos,
+Sort = sortmethods[TargetMode.Value]
+})
+if not plr or not plr.Character or not plr.RootPart then
+return old(self, projmeta, worldmeta, origin, shootpos)
+end
+local aimPart = plr.RootPart
+if TargetPart.Value == 'Head' and plr.Head then
+aimPart = plr.Head
+elseif TargetPart.Value == 'Dynamic' then
+local closestPart, closestDist = nil, math.huge
+local mousePos = inputService:GetMouseLocation()
+for _, part in plr.Character:GetDescendants() do
+if part:IsA('BasePart') then
+local screenPos, onScreen = gameCamera:WorldToViewportPoint(part.Position)
+if onScreen then
+local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
+if dist < closestDist then
+closestDist = dist
+closestPart = part
+end
+end
+end
+end
+aimPart = closestPart or plr.RootPart
+end
+if not aimPart then return old(self, projmeta, worldmeta, origin, shootpos) end
+local lifetime = meta.predictionLifetimeSec or meta.lifetimeSec or 3
+local gravity = (meta.gravitationalAcceleration or 196.2) * (projmeta.gravityMultiplier or 1)
+local projSpeed = (meta.launchVelocity or 100) * (projmeta.velocityMultiplier or 1)
+local offsetpos = pos + (projName == 'owl_projectile' and Vector3.zero or (projmeta.fromPositionOffset or Vector3.zero))
+local playerGravity = workspace.Gravity
+local balloons = plr.Character:GetAttribute('InflatedBalloons')
+if balloons and balloons > 0 then
+playerGravity = workspace.Gravity * (1 - (balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))
+end
+if plr.Character.PrimaryPart and plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
+playerGravity = 6
+end
+if plr.Player and plr.Player:GetAttribute('IsOwlTarget') then
+for _, owl in collectionService:GetTagged('Owl') do
+if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
+playerGravity = 0
+end
+end
+end
+local bc = bowConst()
+local rel = projName == 'owl_projectile' and Vector3.zero or Vector3.new(bc.RelX, bc.RelY, bc.RelZ)
+local newlook = CFrame.new(offsetpos, aimPart.Position) * CFrame.new(rel)
+refreshFilter()
+local targetVel = aimPart.AssemblyLinearVelocity
+local predictedVel = Vector3.new(
+targetVel.X * HorizontalPrediction.Value,
+targetVel.Y * VerticalPrediction.Value,
+targetVel.Z * HorizontalPrediction.Value
+)
+-- Ping offset calculation
+local pingSec = PingOffset.Value / 1000
+local targetPos = aimPart.Position + (targetVel * pingSec)
 
-	-- Map は毎回取り直す（ロビー inject / マップ再生成対策）
-	local function refreshFilter()
-		local map = workspace:FindFirstChild('Map')
-		if map then
-			rayCheck.FilterDescendantsInstances = {map}
-			return true
-		end
-		rayCheck.FilterDescendantsInstances = {}
-		return false
-	end
-
-	-- BowConstants 実値フォールバック（SRC u250 より）
-	local function bowConst()
-		local bc = bedwars.BowConstantsTable
-		if type(bc) == 'table' and bc.RelX then return bc end
-		return {RelX = 0.8, RelY = -0.6, RelZ = 0}
-	end
-
-	local function hasSolver()
-		return type(prediction) == 'table' and type(prediction.SolveTrajectory) == 'function'
-	end
-
-	-- 予測倍率の安全取得（未生成 / 異常値は 1.0 扱い）
-	local function predictionScale(option)
-		local val = option and option.Value
-		if type(val) ~= 'number' or val ~= val then return 1 end
-		return math.clamp(val, 0, 2)
-	end
-
-	local ProjectileAimbot = vape.Categories.Blatant:CreateModule({
-		Name = 'ProjectileAimbot',
-		Function = function(callback)
-			if callback then
-				if not hasSolver() then
-					notif('ProjectileAimbot', 'prediction.SolveTrajectory missing', 8, 'alert')
-					ProjectileAimbot:Toggle()
-					return
-				end
-				old = bedwars.ProjectileController.calculateImportantLaunchValues
-				bedwars.ProjectileController.calculateImportantLaunchValues = function(self, projmeta, worldmeta, origin, shootpos)
-					-- 何が来ても元関数に落とす。Promise reject を絶対に起こさない
-					local ok, res = pcall(function()
-						if not projmeta then return old(self, projmeta, worldmeta, origin, shootpos) end
-						local pos = shootpos or self:getLaunchPosition(origin)
-						if not pos then return old(self, projmeta, worldmeta, origin, shootpos) end
-						local meta = projmeta.getProjectileMeta and projmeta:getProjectileMeta()
-						if not meta then return old(self, projmeta, worldmeta, origin, shootpos) end
-
-						-- projectile 名は関数から取る。フィールドは信用しない
-						local projName = ''
-						if type(projmeta.projectileType) == 'function' then
-							local okp, n = pcall(projmeta.projectileType, 'arrow')
-							projName = okp and tostring(n) or ''
-						elseif type(projmeta.projectile) == 'string' then
-							projName = projmeta.projectile
-						end
-						if not OtherProjectiles.Enabled and not projName:find('arrow') then
-							return old(self, projmeta, worldmeta, origin, shootpos)
-						end
-
-						local plr = entitylib.EntityMouse({
-							Part = 'RootPart',
-							Range = FOV.Value,
-							Players = Targets.Players.Enabled,
-							NPCs = Targets.NPCs.Enabled,
-							Wallcheck = Targets.Walls.Enabled,
-							Origin = pos
-						})
-						if not plr or not plr.Character or not plr.RootPart then
-							return old(self, projmeta, worldmeta, origin, shootpos)
-						end
-
-						-- [added] スタッド単位の距離チェック。FOV(画面上の範囲)とは独立して判定する
-						if DistanceCheck and DistanceCheck.Enabled then
-							local limit = Distance and Distance.Value or 1000
-							if (plr.RootPart.Position - pos).Magnitude > limit then
-								return old(self, projmeta, worldmeta, origin, shootpos)
-							end
-						end
-
-						local aimPart = plr[TargetPart.Value] or plr.RootPart
-						if not aimPart then return old(self, projmeta, worldmeta, origin, shootpos) end
-
-						local lifetime = meta.predictionLifetimeSec or meta.lifetimeSec or 3
-						local gravity = (meta.gravitationalAcceleration or 196.2) * (projmeta.gravityMultiplier or 1)
-						local projSpeed = (meta.launchVelocity or 100) * (projmeta.velocityMultiplier or 1)
-						local offsetpos = pos + (projName == 'owl_projectile' and Vector3.zero or (projmeta.fromPositionOffset or Vector3.zero))
-
-						local playerGravity = workspace.Gravity
-						local balloons = plr.Character:GetAttribute('InflatedBalloons')
-						if balloons and balloons > 0 then
-							playerGravity = workspace.Gravity * (1 - (balloons >= 4 and 1.2 or balloons >= 3 and 1 or 0.975))
-						end
-						if plr.Character.PrimaryPart and plr.Character.PrimaryPart:FindFirstChild('rbxassetid://8200754399') then
-							playerGravity = 6
-						end
-						-- NPC は Player が nil。ここが元のクラッシュ地点
-						if plr.Player and plr.Player:GetAttribute('IsOwlTarget') then
-							for _, owl in collectionService:GetTagged('Owl') do
-								if owl:GetAttribute('Target') == plr.Player.UserId and owl:GetAttribute('Status') == 2 then
-									playerGravity = 0
-								end
-							end
-						end
-
-						local bc = bowConst()
-						local rel = projName == 'owl_projectile' and Vector3.zero or Vector3.new(bc.RelX, bc.RelY, bc.RelZ)
-						local newlook = CFrame.new(offsetpos, aimPart.Position) * CFrame.new(rel)
-						refreshFilter()
-
-						-- 移動予測を水平 / 垂直で独立してスケールする。
-						-- 弾速・重力・戻り値は一切触らないので物理計算との整合はそのまま。
-						local horizontal = predictionScale(HorizontalPrediction)
-						local vertical = predictionScale(VerticalPrediction)
-						local targetVelocity = projName == 'telepearl' and Vector3.zero or aimPart.AssemblyLinearVelocity
-						targetVelocity = Vector3.new(
-							targetVelocity.X * horizontal,
-							targetVelocity.Y * vertical,
-							targetVelocity.Z * horizontal
-						)
-						-- ジャンプ初速も Y 方向の予測要素なので Vertical に従わせる
-						local jumpVelocity = plr.Jumping and (42.6 * vertical) or nil
-
-						local calc = prediction.SolveTrajectory(
-							newlook.p, projSpeed, gravity, aimPart.Position,
-							targetVelocity,
-							playerGravity, plr.HipHeight, jumpVelocity, rayCheck
-						)
-						if not calc then return old(self, projmeta, worldmeta, origin, shootpos) end
-
-						targetinfo.Targets[plr] = os.clock() + 1
-						return {
-							initialVelocity = CFrame.new(newlook.Position, calc).LookVector * projSpeed,
-							positionFrom = offsetpos,
-							deltaT = lifetime,
-							gravitationalAcceleration = gravity,
-							drawDurationSeconds = projmeta.drawDurationSeconds or meta.maxStrengthChargeSec or 1
-						}
-					end)
-					if ok then return res end
-					return old(self, projmeta, worldmeta, origin, shootpos)
-				end
-			else
-				if old then
-					bedwars.ProjectileController.calculateImportantLaunchValues = old
-					old = nil
-				end
-			end
-		end,
-		Tooltip = 'Silently adjusts your aim towards the enemy'
-	})
-
-	Targets = ProjectileAimbot:CreateTargets({Players = true, Walls = true})
-	TargetPart = ProjectileAimbot:CreateDropdown({Name = 'Part', List = {'RootPart', 'Head'}})
-	FOV = ProjectileAimbot:CreateSlider({Name = 'FOV', Min = 1, Max = 1000, Default = 1000})
-	OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true})
-
-	-- [added] スタッド距離でのターゲット制限
-	DistanceCheck = ProjectileAimbot:CreateToggle({
-		Name = 'Distance Check',
-		Default = true,
-		Function = function(callback)
-			if Distance and Distance.Object then
-				Distance.Object.Visible = callback
-			end
-		end,
-		Tooltip = 'Ignores targets farther than the distance below (measured in studs, separate from FOV)'
-	})
-	Distance = ProjectileAimbot:CreateSlider({
-		Name = 'Distance',
-		Min = 0,
-		Max = 1000,
-		Default = 1000,
-		Darker = true,
-		Suffix = function(val)
-			return val == 1 and 'stud' or 'studs'
-		end,
-		Tooltip = 'Maximum 3D distance from your launch position to the target'
-	})
-
-	-- 独立した予測倍率
-	HorizontalPrediction = ProjectileAimbot:CreateSlider({
-		Name = 'Horizontal Prediction',
-		Min = 0,
-		Max = 2,
-		Default = 1,
-		Decimal = 10,
-		Suffix = 'x',
-		Tooltip = 'Scales the target\'s X/Z velocity used for leading.\n0 - aims at where they are now\n1 - stock prediction\n2 - leads twice as far'
-	})
-	VerticalPrediction = ProjectileAimbot:CreateSlider({
-		Name = 'Vertical Prediction',
-		Min = 0,
-		Max = 2,
-		Default = 1,
-		Decimal = 10,
-		Suffix = 'x',
-		Tooltip = 'Scales the target\'s Y velocity and jump velocity used for leading.\nGravity itself is untouched, so falling targets still get their drop compensation'
-	})
+local calc = prediction.SolveTrajectory(
+newlook.p, projSpeed, gravity, targetPos,
+projName == 'telepearl' and Vector3.zero or predictedVel,
+playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck
+)
+if not calc then return old(self, projmeta, worldmeta, origin, shootpos) end
+targetinfo.Targets[plr] = os.clock() + 1
+return {
+initialVelocity = CFrame.new(newlook.Position, calc).LookVector * projSpeed,
+positionFrom = offsetpos,
+deltaT = lifetime,
+gravitationalAcceleration = gravity,
+drawDurationSeconds = AutoCharge.Enabled and (projmeta.drawDurationSeconds or meta.maxStrengthChargeSec or 1) or (projmeta.drawDurationSeconds or 0)
+}
+end)
+if ok then return res end
+return old(self, projmeta, worldmeta, origin, shootpos)
+end
+-- Track forest hits via damage events
+ProjectileAimbot:Clean(vapeEvents.EntityDamageEvent.Event:Connect(function(dmg)
+if dmg.fromEntity == lplr.Character and dmg.entityInstance then
+local targetEnt = nil
+for _, ent in entitylib.List do
+if ent.Character == dmg.entityInstance then
+targetEnt = ent
+break
+end
+end
+if targetEnt and not forestHits[targetEnt] then
+forestHits[targetEnt] = true
+forestHitCount += 1
+if forestHitCount >= forestMaxHits then
+resetForestTracking()
+end
+end
+end
+end))
+else
+if old then
+bedwars.ProjectileController.calculateImportantLaunchValues = old
+old = nil
+end
+resetForestTracking()
+end
+end,
+Tooltip = 'Silently adjusts your aim towards the enemy'
+})
+Targets = ProjectileAimbot:CreateTargets({Players = true, Walls = true})
+TargetPart = ProjectileAimbot:CreateDropdown({Name = 'Part', List = {'RootPart', 'Head', 'Dynamic'}})
+Range = ProjectileAimbot:CreateSlider({Name = 'Range', Min = 0, Max = 1000, Default = 1000, Suffix = ' studs'})
+HorizontalPrediction = ProjectileAimbot:CreateSlider({Name = 'Horizontal Prediction', Min = 0, Max = 5, Default = 0.97, Decimal = 100})
+VerticalPrediction = ProjectileAimbot:CreateSlider({Name = 'Vertical Prediction', Min = 0, Max = 5, Default = 0.97, Decimal = 100})
+OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true})
+AutoCharge = ProjectileAimbot:CreateToggle({
+Name = 'Auto Charge',
+Default = false,
+Tooltip = 'Automatically charges bow to max damage'
+})
+TargetMode = ProjectileAimbot:CreateDropdown({
+Name = 'Target Mode',
+List = {'Distance', 'Health', 'Forest'},
+Default = 'Distance',
+Tooltip = 'Distance - closest target\nHealth - lowest HP target\nForest - targets players you havent hit yet, resets after 5 hits'
+})
+PingOffset = ProjectileAimbot:CreateSlider({
+Name = 'Ping Offset',
+Min = 0,
+Max = 200,
+Default = 0,
+Suffix = 'ms',
+Tooltip = 'Compensates for server latency by predicting target position further ahead'
+})
 end)
 
 run(function()
