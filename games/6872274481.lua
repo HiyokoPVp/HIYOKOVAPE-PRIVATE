@@ -5522,6 +5522,7 @@ end)
 run(function()
 	local TargetPart, Targets, FOV, OtherProjectiles
 	local HorizontalPrediction, VerticalPrediction
+	local DistanceCheck, Distance -- [added]
 	local old
 	local rayCheck = RaycastParams.new()
 	rayCheck.FilterType = Enum.RaycastFilterType.Include
@@ -5548,7 +5549,7 @@ run(function()
 		return type(prediction) == 'table' and type(prediction.SolveTrajectory) == 'function'
 	end
 
-	-- [added] 予測倍率の安全取得（未生成 / 異常値は 1.0 扱い）
+	-- 予測倍率の安全取得（未生成 / 異常値は 1.0 扱い）
 	local function predictionScale(option)
 		local val = option and option.Value
 		if type(val) ~= 'number' or val ~= val then return 1 end
@@ -5597,6 +5598,15 @@ run(function()
 						if not plr or not plr.Character or not plr.RootPart then
 							return old(self, projmeta, worldmeta, origin, shootpos)
 						end
+
+						-- [added] スタッド単位の距離チェック。FOV(画面上の範囲)とは独立して判定する
+						if DistanceCheck and DistanceCheck.Enabled then
+							local limit = Distance and Distance.Value or 1000
+							if (plr.RootPart.Position - pos).Magnitude > limit then
+								return old(self, projmeta, worldmeta, origin, shootpos)
+							end
+						end
+
 						local aimPart = plr[TargetPart.Value] or plr.RootPart
 						if not aimPart then return old(self, projmeta, worldmeta, origin, shootpos) end
 
@@ -5627,7 +5637,7 @@ run(function()
 						local newlook = CFrame.new(offsetpos, aimPart.Position) * CFrame.new(rel)
 						refreshFilter()
 
-						-- [added] 移動予測を水平 / 垂直で独立してスケールする。
+						-- 移動予測を水平 / 垂直で独立してスケールする。
 						-- 弾速・重力・戻り値は一切触らないので物理計算との整合はそのまま。
 						local horizontal = predictionScale(HorizontalPrediction)
 						local vertical = predictionScale(VerticalPrediction)
@@ -5674,7 +5684,30 @@ run(function()
 	FOV = ProjectileAimbot:CreateSlider({Name = 'FOV', Min = 1, Max = 1000, Default = 1000})
 	OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true})
 
-	-- [added] 独立した予測倍率
+	-- [added] スタッド距離でのターゲット制限
+	DistanceCheck = ProjectileAimbot:CreateToggle({
+		Name = 'Distance Check',
+		Default = true,
+		Function = function(callback)
+			if Distance and Distance.Object then
+				Distance.Object.Visible = callback
+			end
+		end,
+		Tooltip = 'Ignores targets farther than the distance below (measured in studs, separate from FOV)'
+	})
+	Distance = ProjectileAimbot:CreateSlider({
+		Name = 'Distance',
+		Min = 0,
+		Max = 1000,
+		Default = 1000,
+		Darker = true,
+		Suffix = function(val)
+			return val == 1 and 'stud' or 'studs'
+		end,
+		Tooltip = 'Maximum 3D distance from your launch position to the target'
+	})
+
+	-- 独立した予測倍率
 	HorizontalPrediction = ProjectileAimbot:CreateSlider({
 		Name = 'Horizontal Prediction',
 		Min = 0,
