@@ -554,6 +554,21 @@ local function getHotbar(tool)
 end
 getgenv().getHotbar = getHotbar
 getgenv().itemMeta = itemMeta
+
+-- ==== CATVAPE AutoTool parity helpers ====
+local function getReach(tool)
+	local meta = tool and itemMeta(tool.Name)
+	return (meta and meta.sword and meta.sword.attackRange)
+		or (bedwars.CombatConstant and bedwars.CombatConstant.RAYCAST_SWORD_CHARACTER_DISTANCE)
+		or store.swordDistance or 14.4
+end
+getgenv().getReach = getReach
+
+local function isMining()
+	local mining = store.breakTool
+	return mining ~= nil and mining.expires > tick() and not (mining.session and mining.session.Cancelled)
+end
+getgenv().isMining = isMining
 -- ==== [FIX END] ====
 
 local function getShieldAttribute(char)
@@ -1839,106 +1854,136 @@ local RemoteHandler = {CachedRemotes = {}}
 		end
 	end
 
-		bedwars.breakBlock = function(block, effects, anim, customHealthbar, autotool, wallcheck, nobreak)
-		if not block or not block.Parent then return end
-		if lplr:GetAttribute('DenyBlockBreak') or not entitylib.isAlive then return end
-		local okReg, registry = pcall(function() return bedwars.BlockController:getHandlerRegistry() end)
-		local handler = (okReg and registry) and registry:getHandler(block.Name) or nil
-		local cost, pos, target, path = math.huge
-		local mag = 9e9
-
-		local positions = (handler and handler:getContainedPositions(block) or {block.Position / 3})
-
-		for _, v in positions do
-			local dpos, dcost, dpath = calculatePath(block, v * 3)
-			local dmag = dpos and (entitylib.character.RootPart.Position - dpos).Magnitude
-			if dpos and (bedwars.breakClosestMode and (dmag < mag or (dmag == mag and dcost < cost)) or not bedwars.breakClosestMode and (dcost < cost or (dcost == cost and dmag < mag))) then
-				cost, pos, target, path, mag = dcost, dpos, v * 3, dpath, dmag
+	local BlockBreakCallbacks = {}
+bedwars.BlockBreakCallbacks = BlockBreakCallbacks
+do
+	local oldHit = bedwars.BlockBreaker.hitBlock
+	bedwars.BlockBreaker.hitBlock = function(self, ...)
+		if vape.Loaded ~= nil then
+			store.lastHit = tick()
+			for _, callback in BlockBreakCallbacks do
+				callback(self, ...)
 			end
 		end
+		return oldHit(self, ...)
+	end
+	vape:Clean(function()
+		table.clear(BlockBreakCallbacks)
+	end)
+end
 
-		if pos then
-			if (entitylib.character.RootPart.Position - pos).Magnitude > 30 then return end
-			local dblock, dpos = getPlacedBlock(pos)
-			if not dblock then return end
+-- ==== CATVAPE AutoTool parity helpers ====
+local function isMining()
+	local mining = store.breakTool
+	return mining ~= nil and mining.expires > tick() and not (mining.session and mining.session.Cancelled)
+end
+getgenv().isMining = isMining
 
-			if not nobreak and (workspace:GetServerTimeNow() - bedwars.SwordController.lastAttack) > 0.2 then
-				local breaktype = (itemMeta(dblock.Name).block or {}).breakType
-				local tool = store.tools[breaktype]
-				if tool then
-					if autotool then
-						local found = false
-						for i, v in store.inventory.hotbar do
-							if v.item and v.item.tool == tool.tool and i ~= (store.inventory.hotbarSlot + 1) then 
-								hotbarSwitch(i - 1)
-								found = true
-								break
-							end
-						end
-						if not found then
-							switchItem(tool.tool)
-						end
-					else
-						switchItem(tool.tool)
-					end
+bedwars.breakBlock = function(block, effects, anim, customHealthbar, autotool, wallcheck, method, directOnly, sequential, session, switchDelay, onTarget)
+	if not block or not block.Parent then return end
+	if lplr:GetAttribute('DenyBlockBreak') or not entitylib.isAlive then return end
+	if session and session.Cancelled then return end
+	local okReg, registry = pcall(function() return bedwars.BlockController:getHandlerRegistry() end)
+	local handler = (okReg and registry) and registry:getHandler(block.Name) or nil
+	local cost, pos, target, path = math.huge
+	local mag = 9e9
+	local positions = (handler and handler:getContainedPositions(block) or {block.Position / 3})
+	for _, v in positions do
+		local dpos, dcost, dpath = calculatePath(block, v * 3)
+		local dmag = dpos and (entitylib.character.RootPart.Position - dpos).Magnitude
+		if dpos and (bedwars.breakClosestMode and (dmag < mag or (dmag == mag and dcost < cost)) or not bedwars.breakClosestMode and (dcost < cost or (dcost == cost and dmag < mag))) then
+			cost, pos, target, path, mag = dcost, dpos, v * 3, dpath, dmag
+		end
+	end
+	if not pos then return end
+	if (entitylib.character.RootPart.Position - pos).Magnitude > 30 then return end
+	local dblock, dpos = getPlacedBlock(pos)
+	if not dblock then return end
+	if onTarget then pcall(onTarget, pos, path, target) end
+	local timeout = math.max(1, lplr:GetNetworkPing() * 4 + 0.5)
+	if (workspace:GetServerTimeNow() - bedwars.SwordController.lastAttack) > 0.4 then
+		local breaktype = (itemMeta(dblock.Name).block or {}).breakType
+		local tool = store.tools[breaktype] or store.tools.stone
+		if tool then
+			local handValue = lplr.Character and lplr.Character:FindFirstChild('HandInvItem')
+			local changed = not store.breakTool or store.breakTool.tool ~= tool.tool or not handValue or handValue.Value ~= tool.tool
+			if changed and switchDelay and switchDelay > 0 then
+				task.wait(switchDelay)
+				if not entitylib.isAlive or (session and session.Cancelled) or getPlacedBlock(pos) ~= dblock or (workspace:GetServerTimeNow() - bedwars.SwordController.lastAttack) <= 0.4 then
+					return pos, path, target, false
 				end
 			end
-
-			if blockhealthbar.blockHealth == -1 or dpos ~= blockhealthbar.breakingBlockPosition then
-				blockhealthbar.blockHealth = getBlockHealth(dblock, dpos)
-				blockhealthbar.breakingBlockPosition = dpos
+			local mining = {tool = tool.tool, expires = tick() + timeout, session = session}
+			store.breakTool = mining
+			if autotool then
+				local slot = getHotbar(tool.tool)
+				if slot then hotbarSwitch(slot) end
 			end
-
-			if not nobreak then
-				bedwars.ClientDamageBlock:Get('DamageBlock'):CallServerAsync({
-					blockRef = {blockPosition = dpos},
-					hitPosition = pos,
-					hitNormal = Vector3.FromNormalId(Enum.NormalId.Top)
-				}):andThen(function(result)
-					if result then
-						 if result == 'cancelled' then
-							store.damageBlockFail = tick() + 1
-							table.clear(cache)
-							return
-						end
-
-						if result == 'destroyed' then
-							table.clear(cache)
-						end
-
-						if effects then
-							local blockdmg = (blockhealthbar.blockHealth - (result == 'destroyed' and 0 or getBlockHealth(dblock, dpos)))
-							customHealthbar = customHealthbar or bedwars.BlockBreaker.updateHealthbar
-							customHealthbar(bedwars.BlockBreaker, {blockPosition = dpos}, blockhealthbar.blockHealth, dblock:GetAttribute('MaxHealth'), blockdmg, dblock)
-							blockhealthbar.blockHealth = math.max(blockhealthbar.blockHealth - blockdmg, 0)
-
-							pcall(function()
-								if blockhealthbar.blockHealth <= 0 then
-									bedwars.BlockBreaker.breakEffect:playBreak(dblock.Name, dpos, lplr)
-									bedwars.BlockBreaker.healthbarMaid:DoCleaning()
-									blockhealthbar.breakingBlockPosition = Vector3.zero
-								else
-									bedwars.BlockBreaker.breakEffect:playHit(dblock.Name, dpos, lplr)
-								end
-							end)
-						end
-
-						if anim then
-							local animation = bedwars.AnimationUtil:playAnimation(lplr, bedwars.BlockController:getAnimationController():getAssetId(1))
-							bedwars.ViewmodelController:playAnimation(15)
-							task.wait(0.3)
-							animation:Stop()
-							animation:Destroy()
-						end
+			if changed then
+				local success, equipped
+				if bedwars.Handler then
+					success, equipped = bedwars.Handler:Get('SetInvItem'):Fire('CallServerAsync', {hand = tool.tool}):await()
+				else
+					success, equipped = pcall(function()
+						return bedwars.Client:Get(remotes.EquipItem):CallServerAsync({hand = tool.tool}):await()
+					end)
+				end
+				if not success or equipped == false or not entitylib.isAlive or (session and session.Cancelled) or not handValue or not handValue.Parent then
+					return pos, path, target, false
+				end
+				handValue.Value = tool.tool
+			end
+			mining.expires = tick() + 0.5
+		end
+	end
+	if blockhealthbar.blockHealth == -1 or dpos ~= blockhealthbar.breakingBlockPosition then
+		blockhealthbar.blockHealth = getBlockHealth(dblock, dpos)
+		blockhealthbar.breakingBlockPosition = dpos
+	end
+	if not entitylib.isAlive or (session and session.Cancelled) or getPlacedBlock(pos) ~= dblock then
+		table.clear(cache)
+		return nil, nil, nil, false
+	end
+	bedwars.ClientDamageBlock:Get('DamageBlock'):CallServerAsync({
+		blockRef = {blockPosition = dpos},
+		hitPosition = pos,
+		hitNormal = Vector3.FromNormalId(Enum.NormalId.Top)
+	}):andThen(function(result)
+		if result then
+			if result == 'cancelled' then
+				store.damageBlockFail = tick() + 0.1
+				table.clear(cache)
+				return
+			end
+			if result == 'destroyed' then
+				table.clear(cache)
+			end
+			if effects then
+				local blockdmg = (blockhealthbar.blockHealth - (result == 'destroyed' and 0 or getBlockHealth(dblock, dpos)))
+				customHealthbar = customHealthbar or bedwars.BlockBreaker.updateHealthbar
+				customHealthbar(bedwars.BlockBreaker, {blockPosition = dpos}, blockhealthbar.blockHealth, dblock:GetAttribute('MaxHealth'), blockdmg, dblock)
+				blockhealthbar.blockHealth = math.max(blockhealthbar.blockHealth - blockdmg, 0)
+				pcall(function()
+					if blockhealthbar.blockHealth <= 0 then
+						bedwars.BlockBreaker.breakEffect:playBreak(dblock.Name, dpos, lplr)
+						bedwars.BlockBreaker.healthbarMaid:DoCleaning()
+						blockhealthbar.breakingBlockPosition = Vector3.zero
+					else
+						bedwars.BlockBreaker.breakEffect:playHit(dblock.Name, dpos, lplr)
 					end
 				end)
 			end
-
-			if effects then
-				return pos, path, target
+			if anim then
+				local animation = bedwars.AnimationUtil:playAnimation(lplr, bedwars.BlockController:getAnimationController():getAssetId(1))
+				bedwars.ViewmodelController:playAnimation(15)
+				task.wait(anim == 'Minimal' and 0.01 or 0.3)
+				animation:Stop()
+				animation:Destroy()
 			end
 		end
-	end
+	end)
+	return pos, path, target, true
+end
 
 	for _, v in Enum.NormalId:GetEnumItems() do
 		table.insert(sides, Vector3.FromNormalId(v) * 3)
@@ -8224,47 +8269,152 @@ end)
 	
 run(function()
 	local AutoTool
-	local old, event
-	
-	local function switchHotbarItem(block)
-		if block and not block:GetAttribute('NoBreak') and not block:GetAttribute('Team'..(lplr:GetAttribute('Team') or 0)..'NoBreak') then
-			local tool, slot = store.tools[(itemMeta(block.Name).block or {}).breakType], nil
-			if tool then
-				for i, v in store.inventory.hotbar do
-					if v.item and v.item.itemType == tool.itemType then slot = i - 1 break end
-				end
-	
-				if hotbarSwitch(slot) then
-					if inputService:IsMouseButtonPressed(0) then 
-						event:Fire() 
-					end
-					return true
-				end
+	local Mode
+	local Delay = {}
+	local SwitchBack
+	local BreakEvent
+	local Looking, Deadline, Previous, Switching = nil, 0, nil, false
+	local function IsMining()
+		local Mining = store.breakTool
+		return Mining ~= nil and Mining.expires > tick() and not (Mining.session and Mining.session.Cancelled)
+	end
+	local function GetToolSlot(Block)
+		if IsMining() or not Block or Block:GetAttribute("NoBreak") or Block:GetAttribute(("Team"..(lplr:GetAttribute("Team") or 0).."NoBreak")) then
+			return
+		end
+		local Meta = itemMeta(Block.Name)
+		local Tool = Meta and Meta.block and store.tools[Meta.block.breakType]
+		if not Tool or (store.hand and store.hand.tool == Tool.tool) then
+			return
+		end
+		for i, v in store.inventory.hotbar do
+			if v.item and v.item.itemType == Tool.itemType then
+				return i - 1
 			end
 		end
+		return
 	end
-	
+	local function GetTargetBlock()
+		if not canDebug then
+			local lib = vape.Libraries.cheatengine
+			local target = lib and lib.BlockTarget
+			if target and type(target.GetBlock) == 'function' then
+				local ok, res = pcall(target.GetBlock)
+				if ok then return res end
+			end
+		end
+		local Placer = store.blockPlacer or (bedwars.BlockPlacementController and bedwars.BlockPlacementController.blockPlacer)
+		local Selector = Placer and Placer.clientManager and Placer.clientManager:getBlockSelector()
+		local Info = Selector and Selector:getMouseInfo(1, {ray = not inputService.KeyboardEnabled and gameCamera:ScreenPointToRay(gameCamera.ViewportSize.X / 2, gameCamera.ViewportSize.Y / 2 - guiService:GetGuiInset().Y) or nil})
+		return Info and Info.target and Info.target.blockInstance or nil
+	end
+	local function SwitchTo(Slot)
+		if Switching then
+			return
+		end
+		Switching = true
+		task.spawn(function()
+			if not IsMining() then
+				hotbarSwitch(Slot)
+			end
+			Switching = false
+		end)
+	end
 	AutoTool = resolveCategory('World'):CreateModule({
 		Name = 'AutoTool',
-		Function = function(callback)
-			if callback then
-				event = Instance.new('BindableEvent')
-				AutoTool:Clean(event)
-				AutoTool:Clean(event.Event:Connect(function()
-					contextActionService:CallFunction('block-break', Enum.UserInputState.Begin, newproxy(true))
+		Function = function(Callback)
+			if Callback then
+				Looking, Deadline, Previous, Switching = nil, 0, nil, false
+				local Event = Instance.new("BindableEvent")
+				BreakEvent = Event
+				AutoTool:Clean(Event)
+				AutoTool:Clean(Event.Event:Connect(function()
+					contextActionService:CallFunction("block-break", Enum.UserInputState.Begin, newproxy(true))
 				end))
-				old = bedwars.BlockBreaker.hitBlock
-				bedwars.BlockBreaker.hitBlock = function(self, maid, raycastparams, ...)
-					local block = self.clientManager:getBlockSelector():getMouseInfo(1, {ray = raycastparams})
-					if switchHotbarItem(block and block.target and block.target.blockInstance or nil) then return end
-					return old(self, maid, raycastparams, ...)
+				AutoTool:Clean(runService.Heartbeat:Connect(function()
+					if not entitylib.isAlive or IsMining() then
+						return
+					end
+					if Mode.Value ~= "Look" and (canDebug or not inputService:IsMouseButtonPressed(Enum.UserInputType.MouseButton1)) then
+						Looking = nil
+						return
+					end
+					local HeldMeta = store.hand.tool and itemMeta(store.hand.tool.Name)
+					if not (HeldMeta and HeldMeta.breakBlock) then
+						Looking, Previous = nil, nil
+						return
+					end
+					local Block = GetTargetBlock()
+					if not Block then
+						Looking = nil
+						if Mode.Value == "Look" and SwitchBack.Enabled and Previous then
+							SwitchTo(Previous)
+							Previous = nil
+						end
+						return
+					end
+					if Block ~= Looking then
+						Looking, Deadline = Block, tick() + (Mode.Value == "Look" and Delay:GetRandomValue() or 0)
+						return
+					end
+					if tick() < Deadline then
+						return
+					end
+					local Slot = GetToolSlot(Block)
+					if Slot then
+						Previous = Previous or (store.hand.tool and getHotbar(store.hand.tool) or nil)
+						SwitchTo(Slot)
+					end
+				end))
+				bedwars.BlockBreakCallbacks.AutoTool = function(self, Maid, MouseRay, ...)
+					if Mode.Value == "Break" then
+						local Info = self.clientManager:getBlockSelector():getMouseInfo(1, {ray = MouseRay})
+						local Slot = GetToolSlot(Info and Info.target and Info.target.blockInstance or nil)
+						if Slot then
+							task.spawn(function()
+								if not AutoTool.Enabled or BreakEvent ~= Event or IsMining() then return end
+								if hotbarSwitch(Slot) and AutoTool.Enabled and BreakEvent == Event and inputService:IsMouseButtonPressed(0) then
+									Event:Fire()
+								end
+							end)
+						end
+					end
 				end
 			else
-				bedwars.BlockBreaker.hitBlock = old
-				old = nil
+				Looking, Previous = nil, nil
+				bedwars.BlockBreakCallbacks.AutoTool = nil
+				BreakEvent = nil
 			end
 		end,
-		Tooltip = 'Automatically selects the correct tool'
+		Tooltip = "Automatically selects the correct tool"
+	})
+	Mode = AutoTool:CreateDropdown({
+		Name = "Mode",
+		List = {"Look", "Break"},
+		Function = function(Val)
+			if Delay.Object then
+				Delay.Object.Visible = Val == "Look"
+				SwitchBack.Object.Visible = Val == "Look"
+			end
+		end,
+		Default = "Break",
+		Tooltip = "Look swaps while you are still aiming at the block, Break swaps on the first hit like it used to"
+	})
+	Delay = AutoTool:CreateTwoSlider({
+		Name = "Delay",
+		Min = 0,
+		Max = 1,
+		Decimal = 100,
+		DefaultMin = 0.06,
+		DefaultMax = 0.16,
+		Darker = true,
+		Suffix = "seconds",
+		Tooltip = "How long you have to be looking at the block before it swaps"
+	})
+	SwitchBack = AutoTool:CreateToggle({
+		Name = "Switch back",
+		Darker = true,
+		Tooltip = "Puts the item you were holding back once you look away"
 	})
 end)
 	
