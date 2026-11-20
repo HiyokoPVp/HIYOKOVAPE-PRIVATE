@@ -5565,10 +5565,14 @@ run(function()
 end)
 	
 run(function()
-local TargetPart, Targets, Range, HorizontalPrediction, VerticalPrediction, OtherProjectiles, AutoCharge, TargetMode, PingOffset
+local TargetPart, Targets, FOV, Distance, HorizontalPrediction, VerticalPrediction, OtherProjectiles, AutoCharge, TargetMode, PingOffset
+local UseUmeko, Potions, MiloCheck, AimToggle
+local Blacklist, CircleObject
 local old
 local rayCheck = RaycastParams.new()
 rayCheck.FilterType = Enum.RaycastFilterType.Include
+local arcCheck = RaycastParams.new()
+arcCheck.FilterType = Enum.RaycastFilterType.Exclude
 local function refreshFilter()
 local map = workspace:FindFirstChild('Map')
 if map then
@@ -5586,7 +5590,42 @@ end
 local function hasSolver()
 return type(prediction) == 'table' and type(prediction.SolveTrajectory) == 'function'
 end
--- Forest tracking state
+local function isHeadshotProjectile(itemType)
+return itemType and (itemType:find('headhunter', 1, true) or itemType:find('tactical', 1, true) or store.equippedKit == 'archer')
+end
+local targetLimbs = {
+Torso = {'UpperTorso', 'LowerTorso'},
+['Left arm'] = {'LeftUpperArm', 'LeftLowerArm', 'LeftHand'},
+['Right arm'] = {'RightUpperArm', 'RightLowerArm', 'RightHand'},
+['Left leg'] = {'LeftUpperLeg', 'LeftLowerLeg', 'LeftFoot'},
+['Right leg'] = {'RightUpperLeg', 'RightLowerLeg', 'RightFoot'}
+}
+local limbOrder = {'Head', 'Torso', 'Left arm', 'Right arm', 'Left leg', 'Right leg'}
+local randomLimb = setmetatable({}, {__mode = 'k'})
+local function getTargetPart(ent, mode)
+if mode == 'Random' and ent.Character then
+local pick = randomLimb[ent.Character]
+if not pick or tick() > pick.Clock then
+pick = {Value = limbOrder[math.random(1, #limbOrder)], Clock = tick() + 1}
+randomLimb[ent.Character] = pick
+end
+mode = pick.Value
+end
+if mode == 'Head' then
+return (ent.Character and ent.Character:FindFirstChild('Head')) or ent.Head or ent.RootPart
+end
+local limbs = targetLimbs[mode]
+if limbs and ent.Character then
+for _, v in limbs do
+local part = ent.Character:FindFirstChild(v)
+if part then return part end
+end
+end
+return ent.RootPart
+end
+local function getMouseOrigin()
+return inputService.TouchEnabled and gameCamera.ViewportSize / 2 or inputService:GetMouseLocation()
+end
 local forestHits = {}
 local forestHitCount = 0
 local forestMaxHits = 5
@@ -5646,41 +5685,65 @@ projName = okp and tostring(n) or ''
 elseif type(projmeta.projectile) == 'string' then
 projName = projmeta.projectile
 end
-if not OtherProjectiles.Enabled and not projName:find('arrow') then
+if projName:find('splash_potion') then
+if not Potions.Enabled then return old(self, projmeta, worldmeta, origin, shootpos) end
+elseif (not OtherProjectiles.Enabled) and not projName:find('arrow') and not (UseUmeko.Enabled and projName:find('^ninja_chakram')) then
 return old(self, projmeta, worldmeta, origin, shootpos)
 end
-local plr = entitylib.EntityMouse({
+if table.find(Blacklist.ListEnabled or {}, ((projName == 'glue_trap' or projName == 'glue_projectile') and 'gloop' or projName)) then
+return old(self, projmeta, worldmeta, origin, shootpos)
+end
+
+-- CAITLYN MODE LOGIC
+local plr
+if TargetMode.Value == 'Caitlyn' then
+local Kit = bedwars.Store and bedwars.Store:getState().Kit
+local Contract = Kit and Kit.activeContract
+local contractTarget = nil
+
+if Contract and Contract.target then
+for _, v in entitylib.List do
+if v.Player and v.Player.UserId == Contract.target.UserId and v.Targetable and v.RootPart and v.Health > 0 then
+if (v.RootPart.Position - pos).Magnitude <= Distance.Value * 3 then
+if not Targets.Walls.Enabled or not entitylib.Wallcheck(pos, v.RootPart.Position, true, v) then
+contractTarget = v
+break
+end
+end
+end
+end
+end
+
+if contractTarget then
+plr = contractTarget
+else
+plr = entitylib.EntityMouse({
 Part = 'RootPart',
-Range = Range.Value,
+Range = FOV.Value,
+Players = Targets.Players.Enabled,
+NPCs = Targets.NPCs.Enabled,
+Wallcheck = Targets.Walls.Enabled,
+Origin = pos,
+Sort = sortmethods.Distance
+})
+end
+else
+plr = entitylib.EntityMouse({
+Part = 'RootPart',
+Range = FOV.Value,
 Players = Targets.Players.Enabled,
 NPCs = Targets.NPCs.Enabled,
 Wallcheck = Targets.Walls.Enabled,
 Origin = pos,
 Sort = sortmethods[TargetMode.Value]
 })
+end
+
 if not plr or not plr.Character or not plr.RootPart then
 return old(self, projmeta, worldmeta, origin, shootpos)
 end
-local aimPart = plr.RootPart
-if TargetPart.Value == 'Head' and plr.Head then
-aimPart = plr.Head
-elseif TargetPart.Value == 'Dynamic' then
-local closestPart, closestDist = nil, math.huge
-local mousePos = inputService:GetMouseLocation()
-for _, part in plr.Character:GetDescendants() do
-if part:IsA('BasePart') then
-local screenPos, onScreen = gameCamera:WorldToViewportPoint(part.Position)
-if onScreen then
-local dist = (Vector2.new(screenPos.X, screenPos.Y) - mousePos).Magnitude
-if dist < closestDist then
-closestDist = dist
-closestPart = part
-end
-end
-end
-end
-aimPart = closestPart or plr.RootPart
-end
+local partName = TargetPart.Value == 'Dynamic' and (isHeadshotProjectile(store.hand and store.hand.tool and store.hand.tool.Name) and 'Head' or 'RootPart') or TargetPart.Value
+local aimPart = getTargetPart(plr, partName)
 if not aimPart then return old(self, projmeta, worldmeta, origin, shootpos) end
 local lifetime = meta.predictionLifetimeSec or meta.lifetimeSec or 3
 local gravity = (meta.gravitationalAcceleration or 196.2) * (projmeta.gravityMultiplier or 1)
@@ -5711,16 +5774,27 @@ targetVel.X * HorizontalPrediction.Value,
 targetVel.Y * VerticalPrediction.Value,
 targetVel.Z * HorizontalPrediction.Value
 )
--- Ping offset calculation
 local pingSec = PingOffset.Value / 1000
 local targetPos = aimPart.Position + (targetVel * pingSec)
-
-local calc = prediction.SolveTrajectory(
-newlook.p, projSpeed, gravity, targetPos,
+local calc, _, travel = prediction.SolveTrajectory(
+newlook.p, projSpeed * (AimToggle.Enabled and 1 or (projmeta.velocityMultiplier or 1)), gravity, targetPos,
 projName == 'telepearl' and Vector3.zero or predictedVel,
-playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck
+playerGravity, plr.HipHeight, plr.Jumping and 42.6 or nil, rayCheck,
+plr.Humanoid.FloorMaterial == Enum.Material.Air or math.abs(targetVel.Y) > 0.01,
+plr.RootPart.Position, plr.RootPart, nil, true
 )
-if not calc then return old(self, projmeta, worldmeta, origin, shootpos) end
+if not calc or not travel or travel > lifetime then return old(self, projmeta, worldmeta, origin, shootpos) end
+if Targets.Walls.Enabled and travel then
+local ignore = {gameCamera, lplr.Character}
+for _, e in entitylib.List do
+if e.Character then table.insert(ignore, e.Character) end
+end
+arcCheck.FilterDescendantsInstances = ignore
+if not prediction.IsTrajectoryClear(newlook.p, calc - newlook.p, gravity, travel, arcCheck) then
+return old(self, projmeta, worldmeta, origin, shootpos)
+end
+end
+store.hitchance.ProjectileAimbot = {Value = 1, Clock = tick()}
 targetinfo.Targets[plr] = os.clock() + 1
 return {
 initialVelocity = CFrame.new(newlook.Position, calc).LookVector * projSpeed,
@@ -5733,7 +5807,6 @@ end)
 if ok then return res end
 return old(self, projmeta, worldmeta, origin, shootpos)
 end
--- Track forest hits via damage events
 ProjectileAimbot:Clean(vapeEvents.EntityDamageEvent.Event:Connect(function(dmg)
 if dmg.fromEntity == lplr.Character and dmg.entityInstance then
 local targetEnt = nil
@@ -5763,29 +5836,64 @@ end,
 Tooltip = 'Silently adjusts your aim towards the enemy'
 })
 Targets = ProjectileAimbot:CreateTargets({Players = true, Walls = true})
-TargetPart = ProjectileAimbot:CreateDropdown({Name = 'Part', List = {'RootPart', 'Head', 'Dynamic'}})
-Range = ProjectileAimbot:CreateSlider({Name = 'Range', Min = 0, Max = 1000, Default = 1000, Suffix = ' studs'})
+local methods = {'Distance', 'Health', 'Forest', 'Caitlyn'}
+for i in sortmethods do
+if not table.find(methods, i) then table.insert(methods, i) end
+end
+TargetPart = ProjectileAimbot:CreateDropdown({Name = 'Part', List = {'RootPart', 'Head', 'Torso', 'Left arm', 'Right arm', 'Left leg', 'Right leg', 'Random', 'Dynamic'}, Tooltip = 'Dynamic aims at the head with headshot-capable bows, including tactical bows and Archer, and at the body with everything else'})
+FOV = ProjectileAimbot:CreateSlider({Name = 'FOV', Min = 1, Max = 1000, Default = 1000, Function = function(val) if CircleObject then CircleObject.Radius = val end end})
+Distance = ProjectileAimbot:CreateSlider({Name = 'Distance', Min = 1, Max = 334, Default = 334, Suffix = function(val) return val == 1 and 'block' or 'blocks' end, Tooltip = 'Maximum enemy distance from you (in blocks)'})
+ProjectileAimbot:CreateToggle({
+Name = 'Range Circle',
+Function = function(callback)
+if callback then
+CircleObject = Drawing.new('Circle')
+CircleObject.Filled = CircleFilled.Enabled
+CircleObject.Color = Color3.fromHSV(CircleColor.Hue, CircleColor.Sat, CircleColor.Value)
+CircleObject.Position = getMouseOrigin()
+CircleObject.Radius = FOV.Value
+CircleObject.NumSides = 100
+CircleObject.Thickness = CircleThickness.Value
+CircleObject.Transparency = 1 - CircleTransparency.Value
+CircleObject.Visible = ProjectileAimbot.Enabled
+ProjectileAimbot:Clean(runService.RenderStepped:Connect(function()
+if CircleObject and CircleObject.Visible then
+CircleObject.Position = getMouseOrigin()
+CircleObject.Radius = FOV.Value
+end
+end))
+else
+pcall(function() CircleObject.Visible = false; CircleObject:Remove() end)
+CircleObject = nil
+end
+CircleColor.Object.Visible = callback
+CircleTransparency.Object.Visible = callback
+CircleThickness.Object.Visible = callback
+CircleFilled.Object.Visible = callback
+end
+})
+CircleColor = ProjectileAimbot:CreateColorSlider({Name = 'Circle Color', Function = function(h, s, v) if CircleObject then CircleObject.Color = Color3.fromHSV(h, s, v) end end, Darker = true, Visible = false})
+CircleTransparency = ProjectileAimbot:CreateSlider({Name = 'Transparency', Min = 0, Max = 1, Decimal = 10, Function = function(val) if CircleObject then CircleObject.Transparency = 1 - val end end, Darker = true, Default = 0.5, Visible = false})
+CircleThickness = ProjectileAimbot:CreateSlider({Name = 'Thickness', Min = 1, Max = 10, Decimal = 10, Function = function(val) if CircleObject then CircleObject.Thickness = val end end, Darker = true, Default = 1, Visible = false, Tooltip = 'How wide the circle outline is, has no effect while Circle Filled is on'})
+CircleFilled = ProjectileAimbot:CreateToggle({Name = 'Circle Filled', Function = function(callback) if CircleObject then CircleObject.Filled = callback end end, Darker = true, Visible = false})
 HorizontalPrediction = ProjectileAimbot:CreateSlider({Name = 'Horizontal Prediction', Min = 0, Max = 5, Default = 0.97, Decimal = 100})
 VerticalPrediction = ProjectileAimbot:CreateSlider({Name = 'Vertical Prediction', Min = 0, Max = 5, Default = 0.97, Decimal = 100})
-OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true})
-AutoCharge = ProjectileAimbot:CreateToggle({
-Name = 'Auto Charge',
-Default = false,
-Tooltip = 'Automatically charges bow to max damage'
-})
+OtherProjectiles = ProjectileAimbot:CreateToggle({Name = 'Other Projectiles', Default = true, Tooltip = 'Aims everything that is not an arrow or a splash potion'})
+UseUmeko = ProjectileAimbot:CreateToggle({Name = 'Use umeko', Tooltip = "Aims umeko's chakram even with Other Projectiles off"})
+Potions = ProjectileAimbot:CreateToggle({Name = 'Shoot pots', Default = true, Tooltip = 'Aims heal, poison and sleep splash potions, separate from Other Projectiles'})
+Blacklist = ProjectileAimbot:CreateTextList({Name = 'Blacklist', Default = {'telepearl'}})
+MiloCheck = ProjectileAimbot:CreateToggle({Name = 'Milo check', Default = true, Tooltip = 'Skips Milo players while they are disguised as a block'})
+AutoCharge = ProjectileAimbot:CreateToggle({Name = 'Auto Charge', Default = false, Tooltip = 'Fully charges your bow, allowing your projectile to deal more damage'})
+AimToggle = ProjectileAimbot:CreateToggle({Name = 'Aim change', Default = true, Tooltip = 'Changes your trajectory to match charge percentage.'})
+PingOffset = ProjectileAimbot:CreateSlider({Name = 'Ping Offset', Min = 0, Max = 200, Default = 0, Suffix = 'ms', Tooltip = 'Compensates for server latency by predicting target position further ahead'})
 TargetMode = ProjectileAimbot:CreateDropdown({
-Name = 'Target Mode',
-List = {'Distance', 'Health', 'Forest'},
-Default = 'Distance',
-Tooltip = 'Distance - closest target\nHealth - lowest HP target\nForest - targets players you havent hit yet, resets after 5 hits'
-})
-PingOffset = ProjectileAimbot:CreateSlider({
-Name = 'Ping Offset',
-Min = 0,
-Max = 200,
-Default = 0,
-Suffix = 'ms',
-Tooltip = 'Compensates for server latency by predicting target position further ahead'
+Name = 'Target Mode', 
+List = methods, 
+Default = 'Distance', 
+Function = function(val) 
+notif('ProjectileAimbot', 'Target Mode: ' .. val, 2) 
+end, 
+Tooltip = 'Distance - closest target\nHealth - lowest HP target\nForest - targets players you havent hit yet, resets after 5 hits\nCaitlyn - targets contract, falls back to nearest if contract is dead'
 })
 end)
 
@@ -17331,3 +17439,37 @@ run(function()
 	syncVisibility(str(Method, 'Fly'))
 end)
 
+run(function()
+local AntiFalseBan
+local lastRootCF = nil
+local safeguardActive = false
+
+AntiFalseBan = resolveCategory('Utility', 'Blatant', 'Render'):CreateModule({
+Name = 'AntiFalseBan',
+Function = function(callback)
+if callback then
+safeguardActive = true
+lastRootCF = entitylib.isAlive and entitylib.character.RootPart.CFrame or nil
+AntiFalseBan:Clean(runService.RenderStepped:Connect(function()
+if not safeguardActive or not entitylib.isAlive or not entitylib.character.Character then return end
+local root = entitylib.character.RootPart
+if root and lastRootCF then
+local dist = (root.CFrame.Position - lastRootCF.Position).Magnitude
+if dist > 40 then
+root.CFrame = lastRootCF
+end
+end
+if root then lastRootCF = root.CFrame end
+end))
+AntiFalseBan:Clean(entitylib.Events.LocalAdded:Connect(function()
+task.wait(0.5)
+lastRootCF = entitylib.character and entitylib.character.RootPart.CFrame or nil
+end))
+else
+safeguardActive = false
+lastRootCF = nil
+end
+end,
+Tooltip = 'Safeguard: Reverts your RootPart CFrame if a local script tries to hijack it.'
+})
+end)
