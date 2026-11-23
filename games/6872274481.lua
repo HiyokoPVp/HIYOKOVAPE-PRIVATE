@@ -4018,7 +4018,7 @@ run(function()
 	-- ============================================================
 	local Killaura
 	local Targets, Sort, SwingRange, AttackRange, AngleSlider, MaxTargets
-	local ChargeTime, UpdateRate, Mouse, Swing, GUI, Limit, LegitAura, Face
+	local ChargeTime, Mouse, Swing, GUI, Limit, LegitAura, Face
 	local AirhitChance, AttackableCheck, InMatchCheck, SkywarsCheck
 	local IgnorePlayer, IgnoredList, IgnoreRange
 	local Animation, AnimationMode, AnimationSpeed, AnimationTween
@@ -4633,7 +4633,7 @@ run(function()
 									AnimTween:Play()
 								end
 							end
-							if not started then task.wait(1 / UpdateRate.Value) end
+							if not started then task.wait(1 / 120) end
 						until not Killaura.Enabled or not Animation.Enabled or Session ~= current
 					end)
 				end
@@ -4658,7 +4658,7 @@ run(function()
 							Attacking = false
 							store.KillauraTarget = nil
 							UpdateVisuals({})
-							task.wait(1 / UpdateRate.Value)
+							task.wait(1 / 120)
 							continue
 						end
 
@@ -4765,7 +4765,7 @@ run(function()
 									if not Attacking then
 										Attacking = true
 										store.KillauraTarget = v
-										if not Swing.Enabled and AnimDelay < tick() and not LegitAura.Enabled then
+										if not Swing.Enabled and not LegitAura.Enabled and AnimDelay < tick() then
 											local dl = math.max(ChargeTime.Value, 0.11)
 											AnimDelay = tick() + dl
 											SwingGap = dl
@@ -4943,7 +4943,7 @@ run(function()
 
 						if #attacked > 0 then
 							ContinueUntil = tick() + (ContinueSwing.Value / 1000)
-						elseif sword and meta and tick() < ContinueUntil and AnimDelay < tick() and not Swing.Enabled and not LegitAura.Enabled then
+						elseif sword and meta and tick() < ContinueUntil and not Swing.Enabled and not LegitAura.Enabled and AnimDelay < tick() then
 							local dl = math.max(ChargeTime.Value, 0.11)
 							AnimDelay = tick() + dl
 							SwingGap = dl
@@ -4995,7 +4995,6 @@ run(function()
 	AttackRange = Killaura:CreateSlider({Name = 'Attack range', Min = 1, Max = 20, Default = 18, Suffix = function(v) return v == 1 and 'stud' or 'studs' end, Tooltip = 'Measured where the server sees both of you, so a target running at you has less reach than one running away'})
 	ChargeTime = Killaura:CreateSlider({Name = 'Swing time', Min = 0.11, Max = 0.5, Default = 0.11, Decimal = 100})
 	AngleSlider = Killaura:CreateSlider({Name = 'Max angle', Min = 1, Max = 360, Default = 360})
-	UpdateRate = Killaura:CreateSlider({Name = 'Update rate', Min = 1, Max = 120, Default = 60, Suffix = 'hz'})
 	MaxTargets = Killaura:CreateSlider({Name = 'Max targets', Min = 1, Max = 5, Default = 5})
 	AirhitChance = Killaura:CreateSlider({Name = 'Airhit chance', Min = 0, Max = 100, Default = 100, Suffix = '%', Tooltip = 'Chance to land a hit while the target is off the ground'})
 
@@ -5045,7 +5044,15 @@ run(function()
 	GUI = Killaura:CreateToggle({Name = 'GUI check'})
 	AttackableCheck = Killaura:CreateToggle({Name = 'Attackable check'})
 	InMatchCheck = Killaura:CreateToggle({Name = 'In Match Check', Default = false})
-	LegitAura = Killaura:CreateToggle({Name = 'Swing only', Tooltip = 'Only attacks while swinging manually'})
+	LegitAura = Killaura:CreateToggle({
+		Name = 'Swing only',
+		Function = function(callback)
+			if ChargeTime and ChargeTime.Object then
+				ChargeTime.Object.Visible = not callback
+			end
+		end,
+		Tooltip = 'Only attacks while swinging manually'
+	})
 	Face = Killaura:CreateToggle({Name = 'Face target'})
 
 	Killaura:CreateToggle({
@@ -5220,7 +5227,7 @@ run(function()
     UseUmeko = Killaura:CreateToggle({Name = 'Use umeko', Darker = true, Visible = false, Tooltip = "Also throws umeko's chakram, waiting for it to come back"})
     UseLasso = Killaura:CreateToggle({Name = 'Use Lasso', Darker = true, Visible = false, Tooltip = "Also throws lassy's lasso"})
 end)
-	
+
 run(function()
 	local Value
 	local CameraDir
