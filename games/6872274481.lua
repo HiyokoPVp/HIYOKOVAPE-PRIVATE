@@ -5459,85 +5459,119 @@ end)
 	
 run(function()
 	local NoFall
-	local Mode
-	local rayParams = RaycastParams.new()
-	local groundHit
+	local Damage
+	local Disabled = setmetatable({}, {__mode = 'k'})
+	local GroundHit
+
+	if store.cannonFlight == nil then store.cannonFlight = false end
+	if store.infinitefly == nil then store.infinitefly = false end
+
 	task.spawn(function()
-		groundHit = bedwars.Client:Get(remotes.GroundHit).instance
+		local ok, h = pcall(function() return bedwars.Handler:Get('GroundHit') end)
+		if ok and h and h.Success then
+			GroundHit = h
+			return
+		end
+		local ok2, r = pcall(function()
+			return bedwars.Client:Get(remotes.GroundHit or 'GroundHit')
+		end)
+		if ok2 and r then GroundHit = r.instance or r end
 	end)
-	
+
+	local function fireGround(vec)
+		if not GroundHit then return end
+		pcall(function()
+			if type(GroundHit.Fire) == 'function' then
+				GroundHit:Fire('SendToServer', nil, vec, workspace:GetServerTimeNow())
+			elseif type(GroundHit.SendToServer) == 'function' then
+				GroundHit:SendToServer(nil, vec, workspace:GetServerTimeNow())
+			elseif type(GroundHit.FireServer) == 'function' then
+				GroundHit:FireServer(nil, vec, workspace:GetServerTimeNow())
+			end
+		end)
+	end
+
+	local function disableStates(humanoid)
+		if not canDebug or type(getconnections) ~= 'function' then return end
+		if not humanoid or Disabled[humanoid] then return end
+		Disabled[humanoid] = {}
+		for _, v in getconnections(humanoid.StateChanged) do
+			pcall(function()
+				v:Disable()
+				table.insert(Disabled[humanoid], v)
+			end)
+		end
+	end
+
+	local function restoreStates()
+		for _, list in Disabled do
+			for _, v in list do
+				pcall(function() v:Enable() end)
+			end
+		end
+		table.clear(Disabled)
+	end
+
 	NoFall = vape.Categories.Blatant:CreateModule({
 		Name = 'NoFall',
 		Function = function(callback)
 			if callback then
-				local tracked = 0
-				if Mode.Value == 'Gravity' then
-					local extraGravity = 0
-					NoFall:Clean(runService.PreSimulation:Connect(function(dt)
-						if entitylib.isAlive then
-							local root = entitylib.character.RootPart
-							if root.AssemblyLinearVelocity.Y < -85 then
-								rayParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
-								rayParams.CollisionGroup = root.CollisionGroup
-	
-								local rootSize = root.Size.Y / 2 + entitylib.character.HipHeight
-								local ray = workspace:Blockcast(root.CFrame, Vector3.new(3, 3, 3), Vector3.new(0, (tracked * 0.1) - rootSize, 0), rayParams)
-								if not ray then
-									root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, -86, root.AssemblyLinearVelocity.Z)
-									root.CFrame += Vector3.new(0, extraGravity * dt, 0)
-									extraGravity += -workspace.Gravity * dt
-								end
-							else
-								extraGravity = 0
-							end
-						end
-					end))
-				else
-					repeat
-						if entitylib.isAlive then
-							local root = entitylib.character.RootPart
-							tracked = entitylib.character.Humanoid.FloorMaterial == Enum.Material.Air and math.min(tracked, root.AssemblyLinearVelocity.Y) or 0
-	
-							if tracked < -85 then
-								if Mode.Value == 'Packet' then
-									groundHit:FireServer(nil, Vector3.new(0, tracked, 0), workspace:GetServerTimeNow())
-								else
-									rayParams.FilterDescendantsInstances = {lplr.Character, gameCamera}
-									rayParams.CollisionGroup = root.CollisionGroup
-	
-									local rootSize = root.Size.Y / 2 + entitylib.character.HipHeight
-									if Mode.Value == 'Teleport' then
-										local ray = workspace:Blockcast(root.CFrame, Vector3.new(3, 3, 3), Vector3.new(0, -1000, 0), rayParams)
-										if ray then
-											root.CFrame -= Vector3.new(0, root.Position.Y - (ray.Position.Y + rootSize), 0)
-										end
-									else
-										local ray = workspace:Blockcast(root.CFrame, Vector3.new(3, 3, 3), Vector3.new(0, (tracked * 0.1) - rootSize, 0), rayParams)
-										if ray then
-											tracked = 0
-											root.AssemblyLinearVelocity = Vector3.new(root.AssemblyLinearVelocity.X, -80, root.AssemblyLinearVelocity.Z)
-										end
-									end
-								end
-							end
-						end
-	
-						task.wait(0.03)
-					until not NoFall.Enabled
+				if entitylib.isAlive then
+					disableStates(entitylib.character.Humanoid)
 				end
+
+				local tracked, lastHit = 0, 0
+
+				NoFall:Clean(runService.PostSimulation:Connect(function()
+					if entitylib.isAlive and store.matchState == 1
+						and not store.cannonFlight and not store.infinitefly then
+						local root = entitylib.character.RootPart
+						local velocity = root.AssemblyLinearVelocity
+
+						if tracked < -(45 + (Damage.Value * 0.75)) then
+							local cushion = Vector3.new(0, 2.5, 0)
+							root.AssemblyLinearVelocity = cushion
+							entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Landed)
+							runService.PreRender:Wait()
+							if root.AssemblyLinearVelocity == cushion then
+								root.AssemblyLinearVelocity = velocity
+							end
+							if os.clock() - lastHit >= 0.1 then
+								fireGround(Vector3.new(0, tracked, 0))
+								lastHit = os.clock()
+							end
+						end
+
+						tracked = velocity.Y
+					else
+						tracked = 0
+					end
+				end))
+
+				NoFall:Clean(entitylib.Events.LocalAdded:Connect(function(ent)
+					task.spawn(function()
+						if ent.Humanoid and ent.Humanoid:WaitForChild('Animator', 5) then
+							task.wait(0.5)
+							if canDebug and NoFall.Enabled and not Disabled[ent.Humanoid] then
+								disableStates(ent.Humanoid)
+							end
+						end
+					end)
+				end))
+			else
+				restoreStates()
 			end
 		end,
 		Tooltip = 'Prevents taking fall damage.'
 	})
-	Mode = NoFall:CreateDropdown({
-		Name = 'Mode',
-		List = {'Packet', 'Gravity', 'Teleport', 'Bounce'},
-		Function = function()
-			if NoFall.Enabled then
-				NoFall:Toggle()
-				NoFall:Toggle()
-			end
-		end
+
+	Damage = NoFall:CreateSlider({
+		Name = 'Damage',
+		Min = 0,
+		Max = 100,
+		Default = 0,
+		Suffix = '%',
+		Tooltip = 'How much of each fall lands on you, it only starts saving you once you are dropping faster than this lets through'
 	})
 end)
 	
