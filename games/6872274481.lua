@@ -17481,27 +17481,33 @@ Tooltip = 'Safeguard: Reverts your RootPart CFrame if a local script tries to hi
 })
 end)
 
--- ============================================================
--- AutoGingerbreadMan : CATVAPE port (HIYOKOVAPE build)
---   ・足元のセルが空なら gumdrop_bounce_pad を設置
---   ・LaunchPadController.attemptLaunch をフック
---   ・発射成功後、遅延を入れてパッドを破壊（Legit switch対応）
---   ・発射後のジャンプ / 自分のパッドのみ / 成功時のみ
--- ============================================================
 run(function()
 	local AutoGingerbread
-	local Range
-	local Delay
-	local Break
-	local Place
-	local PlaceDelay
-	local Jump
-	local Switch
-	local OwnOnly
-	local SuccessfulOnly
-	local KitCheck
-	local Old
+	local Range, Delay, PlaceDelay
+	local Break, Place, Jump, Switch, OwnOnly, SuccessfulOnly, KitCheck
+	local Old, Hooked
 	local NextPlace = 0
+
+	-- CATVAPE の CanPlace() 相当（HIYOKOVAPE に存在しないので自作）
+	local function canPlaceNow()
+		local placer = bedwars.BlockPlacementController
+		if placer and placer.disabled then return false end
+		local casting = lplr:GetAttribute('IsCasting')
+		if casting and casting ~= 0 and casting ~= '' and casting ~= false then return false end
+		if lplr:GetAttribute('DenyBlockPlace') then return false end
+		return true
+	end
+
+	local function placeCPS()
+		local sc = bedwars.SharedConstants
+		local cps = sc and sc.BLOCK_PLACE_CPS
+		if type(cps) ~= 'number' or cps <= 0 then cps = 12 end
+		return cps
+	end
+
+	local function kitOk()
+		return (not KitCheck.Enabled) or store.hasKit('gingerbread_man')
+	end
 
 	AutoGingerbread = resolveCategory('Kits', 'Kit', 'Utility'):CreateModule({
 		Name = 'AutoGingerbreadMan',
@@ -17512,65 +17518,94 @@ run(function()
 				AutoGingerbread:Clean(runService.Heartbeat:Connect(function()
 					if not Place.Enabled then return end
 					if not entitylib.isAlive then return end
-					if KitCheck.Enabled and not store.hasKit('gingerbread_man') then return end
+					if not kitOk() then return end
 					if tick() < NextPlace then return end
 					if not getItem('gumdrop_bounce_pad') then return end
+					if not canPlaceNow() then return end
 
-					local placer = bedwars.BlockPlacementController
-					if placer and placer.disabled then return end
-					if lplr:GetAttribute('IsCasting') then return end
+					local char = entitylib.character
+					local pos = roundPos(char.RootPart.Position - Vector3.new(0, char.HipHeight + 1.5, 0))
+					if getPlacedBlock(pos) then return end
 
-					local character = entitylib.character
-					local position = roundPos(character.RootPart.Position - Vector3.new(0, character.HipHeight + 1.5, 0))
-					if not getPlacedBlock(position) then
-						local cps = (bedwars.SharedConstants and bedwars.SharedConstants.BLOCK_PLACE_CPS) or 12
-						NextPlace = tick() + math.max(PlaceDelay.Value, 1 / cps)
-						bedwars.placeBlock(position, 'gumdrop_bounce_pad')
-					end
+					NextPlace = tick() + math.max(PlaceDelay.Value, 1 / placeCPS())
+					pcall(bedwars.placeBlock, pos, 'gumdrop_bounce_pad')
 				end))
 
-				Old = bedwars.LaunchPadController.attemptLaunch
-				bedwars.LaunchPadController.attemptLaunch = function(self, block, ...)
-					local lastLaunch = self and self.lastLaunch or 0
-					local call = Old(self, block, ...)
+				Hooked = false
+				local session = {}
+				AutoGingerbread.Session = session
 
-					if not SuccessfulOnly.Enabled or (self and self.lastLaunch and self.lastLaunch ~= lastLaunch) then
-						if Break.Enabled and entitylib.isAlive
-							and (not KitCheck.Enabled or store.hasKit('gingerbread_man'))
-							and block and block:IsA('BasePart')
-							and (not OwnOnly.Enabled or block:GetAttribute('PlacedByUserId') == lplr.UserId)
-							and (block.Position - entitylib.character.RootPart.Position).Magnitude <= Range.Value then
-							task.delay(Delay.Value, function()
-								if AutoGingerbread.Enabled and block.Parent then
-									if Switch.Enabled then
-										local meta = itemMeta(block.Name)
-										local breakType = meta and meta.block and meta.block.breakType
-										local tool = (breakType and store.tools[breakType]) or store.tools.sword
-										local slot = tool and getHotbar(tool.tool)
-										if slot then
-											hotbarSwitch(slot)
-										elseif tool then
-											switchItem(tool.tool)
-										end
+				task.spawn(function()
+					local deadline = os.clock() + 60
+					while AutoGingerbread.Enabled and AutoGingerbread.Session == session do
+						local ctrl = bedwars.LaunchPadController
+						if ctrl and type(ctrl.attemptLaunch) == 'function' then
+							Old = ctrl.attemptLaunch
+							Hooked = ctrl
+
+							ctrl.attemptLaunch = function(self, block, ...)
+								local lastLaunch = self and self.lastLaunch or 0
+								local ok, a, b, c = pcall(Old, self, block, ...)
+								if not ok then return nil end
+
+								local launched = (not SuccessfulOnly.Enabled)
+									or (self and self.lastLaunch and self.lastLaunch ~= lastLaunch)
+
+								if launched then
+									if Break.Enabled and entitylib.isAlive and kitOk()
+										and typeof(block) == 'Instance' and block:IsA('BasePart')
+										and (not OwnOnly.Enabled or block:GetAttribute('PlacedByUserId') == lplr.UserId)
+										and (block.Position - entitylib.character.RootPart.Position).Magnitude <= Range.Value then
+
+										task.delay(Delay.Value, function()
+											if not AutoGingerbread.Enabled then return end
+											if not block.Parent then return end
+											if Switch.Enabled then
+												pcall(function()
+													local meta = itemMeta(block.Name)
+													local breakType = meta and meta.block and meta.block.breakType
+													local tool = (breakType and store.tools[breakType]) or store.tools.sword
+													if not tool then return end
+													local slot = getHotbar(tool.tool)
+													if slot then
+														hotbarSwitch(slot)
+													else
+														switchItem(tool.tool)
+													end
+												end)
+											end
+											pcall(bedwars.breakBlock, block, false, nil, nil, Switch.Enabled)
+										end)
 									end
-									bedwars.breakBlock(block, false, nil, nil, Switch.Enabled)
+
+									if Jump.Enabled and entitylib.isAlive and kitOk() then
+										pcall(function()
+											entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+										end)
+									end
 								end
-							end)
-						end
 
-						if Jump.Enabled and entitylib.isAlive
-							and (not KitCheck.Enabled or store.hasKit('gingerbread_man')) then
-							entitylib.character.Humanoid:ChangeState(Enum.HumanoidStateType.Jumping)
+								return a, b, c
+							end
+							break
 						end
+						if os.clock() > deadline then break end
+						task.wait(0.25)
 					end
+				end)
 
-					return call
-				end
+				AutoGingerbread:Clean(function()
+					if Hooked and Old then
+						pcall(function() Hooked.attemptLaunch = Old end)
+					end
+					Hooked, Old = nil, nil
+				end)
 			else
-				if Old then
-					bedwars.LaunchPadController.attemptLaunch = Old
-					Old = nil
+				AutoGingerbread.Session = nil
+				if Hooked and Old then
+					pcall(function() Hooked.attemptLaunch = Old end)
 				end
+				Hooked, Old = nil, nil
 			end
 		end,
 		Tooltip = 'Automatically handles Gingerbread Man launch pads.'
@@ -17589,14 +17624,8 @@ run(function()
 
 	PlaceDelay = AutoGingerbread:CreateSlider({
 		Name = 'Place delay',
-		Min = 0,
-		Max = 1,
-		Default = 0,
-		Decimal = 100,
-		Darker = true,
-		Suffix = function(val)
-			return val == 1 and 'sec' or 'secs'
-		end
+		Min = 0, Max = 1, Default = 0, Decimal = 100, Darker = true,
+		Suffix = function(val) return val == 1 and 'sec' or 'secs' end
 	})
 
 	Break = AutoGingerbread:CreateToggle({
@@ -17613,49 +17642,22 @@ run(function()
 	})
 
 	Jump = AutoGingerbread:CreateToggle({Name = 'Jump after launch'})
-
-	Switch = AutoGingerbread:CreateToggle({
-		Name = 'Legit switch',
-		Darker = true
-	})
-
-	OwnOnly = AutoGingerbread:CreateToggle({
-		Name = 'Own pads only',
-		Default = true,
-		Darker = true
-	})
-
-	SuccessfulOnly = AutoGingerbread:CreateToggle({
-		Name = 'Successful launch only',
-		Default = true
-	})
+	Switch = AutoGingerbread:CreateToggle({Name = 'Legit switch', Darker = true})
+	OwnOnly = AutoGingerbread:CreateToggle({Name = 'Own pads only', Default = true, Darker = true})
+	SuccessfulOnly = AutoGingerbread:CreateToggle({Name = 'Successful launch only', Default = true})
 
 	Range = AutoGingerbread:CreateSlider({
-		Name = 'Range',
-		Min = 1,
-		Max = 30,
-		Default = 30,
-		Darker = true,
-		Suffix = function(val)
-			return val <= 1 and 'stud' or 'studs'
-		end
+		Name = 'Range', Min = 1, Max = 30, Default = 30, Darker = true,
+		Suffix = function(val) return val <= 1 and 'stud' or 'studs' end
 	})
 
 	Delay = AutoGingerbread:CreateSlider({
-		Name = 'Break delay',
-		Min = 0,
-		Max = 1,
-		Default = 0.05,
-		Decimal = 100,
-		Darker = true,
-		Suffix = function(val)
-			return val == 1 and 'sec' or 'secs'
-		end
+		Name = 'Break delay', Min = 0, Max = 1, Default = 0.05, Decimal = 100, Darker = true,
+		Suffix = function(val) return val == 1 and 'sec' or 'secs' end
 	})
 
 	KitCheck = AutoGingerbread:CreateToggle({
-		Name = 'Kit check',
-		Default = true,
+		Name = 'Kit check', Default = true,
 		Tooltip = 'Only runs while you are using the Gingerbread Man kit'
 	})
 end)
